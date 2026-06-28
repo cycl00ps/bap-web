@@ -12,13 +12,13 @@ Authorization: Bearer bap_...
 
 Bearer-token API requests do not need CSRF headers. Browser-session mutating requests must include `X-CSRF-Token` from `GET /api/session`, but agents should prefer bearer tokens.
 
-Agents should not expect unauthenticated operational access. Agents should not create their own token unless the user has already authenticated as an admin and explicitly asks for token creation.
+Agents should not expect unauthenticated operational access. Agents should not create their own token unless the user has already authenticated and explicitly asks for token creation. Non-admin bearer tokens cannot create more API tokens; admin bearer tokens can create tokens but should only do so when the user asks.
 
 Use the least privilege token that can complete the task:
 
 - Non-admin token: normal VM, shell, SSH key, network, and egress policy operations.
 - Admin token: token management, image builds, image hooks, kernel import/upload/test/status/delete, and other administrative operations.
-- Prefer short expiration times for agent tokens.
+- Token expiry defaults to 30 days when omitted; prefer shorter expiration times for temporary agent work.
 
 ## Discovery
 

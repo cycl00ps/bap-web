@@ -81,6 +81,17 @@
         }
       }
     },
+    "/api/users": {
+      "get": {
+        "tags": ["Users"],
+        "operationId": "listUsers",
+        "summary": "List users",
+        "responses": {
+          "200": {"description": "Users", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/UserSummary"}}}}},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
     "/api/host/status": {
       "get": {
         "tags": ["Host"],
@@ -616,6 +627,8 @@
           "name": {"type": "string"},
           "prefix": {"type": "string"},
           "is_admin": {"type": "boolean"},
+          "owner_user_id": {"type": "string"},
+          "owner_username": {"type": "string"},
           "created_by": {"type": "string"},
           "created_at": {"type": "string", "format": "date-time"},
           "last_used_at": {"type": "string", "format": "date-time"},
@@ -626,11 +639,15 @@
       "APITokenCreateRequest": {
         "type": "object",
         "required": ["name"],
-        "properties": {"name": {"type": "string"}, "is_admin": {"type": "boolean", "default": true}, "expires_at": {"type": "string", "format": "date-time"}}
+        "properties": {"name": {"type": "string"}, "owner_user_id": {"type": "string"}, "is_admin": {"type": "boolean", "default": false}, "expires_at": {"type": "string", "format": "date-time", "description": "Defaults to 30 days from creation when omitted."}}
       },
       "APITokenCreateResponse": {
         "type": "object",
         "properties": {"token": {"$ref": "#/components/schemas/APIToken"}, "secret": {"type": "string"}}
+      },
+      "UserSummary": {
+        "type": "object",
+        "properties": {"id": {"type": "string"}, "username": {"type": "string"}, "is_admin": {"type": "boolean"}}
       },
       "HostStatus": {
         "type": "object",

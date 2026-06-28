@@ -359,8 +359,155 @@ func TestAPITokenAuthenticatesWithoutCSRF(t *testing.T) {
 	sessionReq.Header.Set("Authorization", "Bearer "+created.Secret)
 	sessionRR := httptest.NewRecorder()
 	a.Router().ServeHTTP(sessionRR, sessionReq)
-	if sessionRR.Code != http.StatusOK || !strings.Contains(sessionRR.Body.String(), `"user":"token:agent"`) {
+	if sessionRR.Code != http.StatusOK || !strings.Contains(sessionRR.Body.String(), `"user":"admin"`) || !strings.Contains(sessionRR.Body.String(), `"is_admin":false`) {
 		t.Fatalf("token session response = %d, body = %s", sessionRR.Code, sessionRR.Body.String())
+	}
+}
+
+func TestAPITokenOwnershipAndMintingRules(t *testing.T) {
+	a, adminSess := newAuthenticatedTestApp(t)
+	defer a.Close()
+	dev := addTestUser(t, a, "u2", "dev", false)
+	devSess := addTestSession(t, a, "sess-dev", dev)
+
+	usersReq := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	usersReq.AddCookie(&http.Cookie{Name: "bap_web_session", Value: adminSess.ID})
+	usersRR := httptest.NewRecorder()
+	a.Router().ServeHTTP(usersRR, usersReq)
+	if usersRR.Code != http.StatusOK || !strings.Contains(usersRR.Body.String(), `"username":"dev"`) {
+		t.Fatalf("admin user list status = %d, body = %s", usersRR.Code, usersRR.Body.String())
+	}
+	usersReq = httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	usersReq.AddCookie(&http.Cookie{Name: "bap_web_session", Value: devSess.ID})
+	usersRR = httptest.NewRecorder()
+	a.Router().ServeHTTP(usersRR, usersReq)
+	if usersRR.Code != http.StatusForbidden {
+		t.Fatalf("non-admin user list status = %d, body = %s", usersRR.Code, usersRR.Body.String())
+	}
+
+	createWithSession := func(sess model.Session, body string) (model.APIToken, string, int, string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/tokens", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-CSRF-Token", sess.CSRFToken)
+		req.AddCookie(&http.Cookie{Name: "bap_web_session", Value: sess.ID})
+		rr := httptest.NewRecorder()
+		a.Router().ServeHTTP(rr, req)
+		var created struct {
+			Token  model.APIToken `json:"token"`
+			Secret string         `json:"secret"`
+		}
+		if rr.Code == http.StatusCreated {
+			if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return created.Token, created.Secret, rr.Code, rr.Body.String()
+	}
+	createWithBearer := func(secret, body string) (model.APIToken, string, int, string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/tokens", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+secret)
+		rr := httptest.NewRecorder()
+		a.Router().ServeHTTP(rr, req)
+		var created struct {
+			Token  model.APIToken `json:"token"`
+			Secret string         `json:"secret"`
+		}
+		if rr.Code == http.StatusCreated {
+			if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return created.Token, created.Secret, rr.Code, rr.Body.String()
+	}
+
+	devToken, devSecret, status, body := createWithSession(adminSess, `{"name":"agent","owner_user_id":"u2"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("admin create for user status = %d, body = %s", status, body)
+	}
+	if devToken.OwnerUserID != "u2" || devToken.OwnerUsername != "dev" || devToken.IsAdmin || devToken.ExpiresAt == nil {
+		t.Fatalf("unexpected dev token: %#v", devToken)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/tokens", nil)
+	listReq.AddCookie(&http.Cookie{Name: "bap_web_session", Value: devSess.ID})
+	listRR := httptest.NewRecorder()
+	a.Router().ServeHTTP(listRR, listReq)
+	if listRR.Code != http.StatusOK {
+		t.Fatalf("dev list status = %d, body = %s", listRR.Code, listRR.Body.String())
+	}
+	var listed []model.APIToken
+	if err := json.Unmarshal(listRR.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != devToken.ID {
+		t.Fatalf("expected dev to see own token only, got %#v", listed)
+	}
+
+	_, _, status, _ = createWithSession(devSess, `{"name":"bad-owner","owner_user_id":"u1"}`)
+	if status != http.StatusForbidden {
+		t.Fatalf("non-admin create for another owner status = %d", status)
+	}
+	_, _, status, _ = createWithSession(devSess, `{"name":"bad-admin","is_admin":true}`)
+	if status != http.StatusForbidden {
+		t.Fatalf("non-admin create admin token status = %d", status)
+	}
+	_, _, status, _ = createWithBearer(devSecret, `{"name":"bad-mint"}`)
+	if status != http.StatusForbidden {
+		t.Fatalf("non-admin bearer mint status = %d", status)
+	}
+
+	adminToken, adminSecret, status, body := createWithSession(adminSess, `{"name":"admin-agent","is_admin":true}`)
+	if status != http.StatusCreated {
+		t.Fatalf("admin token create status = %d, body = %s", status, body)
+	}
+	if !adminToken.IsAdmin || adminSecret == "" {
+		t.Fatalf("unexpected admin token: %#v secret=%q", adminToken, adminSecret)
+	}
+	bearerToken, _, status, body := createWithBearer(adminSecret, `{"name":"admin-bearer-created","owner_user_id":"u2"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("admin bearer create status = %d, body = %s", status, body)
+	}
+	if bearerToken.OwnerUserID != "u2" || bearerToken.IsAdmin {
+		t.Fatalf("unexpected admin bearer-created token: %#v", bearerToken)
+	}
+}
+
+func TestAPITokensPageCreateAndRoleControls(t *testing.T) {
+	a, adminSess := newAuthenticatedTestApp(t)
+	defer a.Close()
+	dev := addTestUser(t, a, "u2", "dev", false)
+	devSess := addTestSession(t, a, "sess-dev", dev)
+
+	adminReq := httptest.NewRequest(http.MethodGet, "/tokens", nil)
+	adminReq.AddCookie(&http.Cookie{Name: "bap_web_session", Value: adminSess.ID})
+	adminRR := httptest.NewRecorder()
+	a.Router().ServeHTTP(adminRR, adminReq)
+	if adminRR.Code != http.StatusOK || !strings.Contains(adminRR.Body.String(), "API Tokens") || !strings.Contains(adminRR.Body.String(), "Admin token") {
+		t.Fatalf("admin tokens page = %d, body = %s", adminRR.Code, adminRR.Body.String())
+	}
+
+	userReq := httptest.NewRequest(http.MethodGet, "/tokens", nil)
+	userReq.AddCookie(&http.Cookie{Name: "bap_web_session", Value: devSess.ID})
+	userRR := httptest.NewRecorder()
+	a.Router().ServeHTTP(userRR, userReq)
+	if userRR.Code != http.StatusOK || strings.Contains(userRR.Body.String(), "Admin token") {
+		t.Fatalf("user tokens page = %d, body = %s", userRR.Code, userRR.Body.String())
+	}
+
+	form := url.Values{}
+	form.Set("csrf", devSess.CSRFToken)
+	form.Set("name", "dev-agent")
+	form.Set("expires_at", time.Now().UTC().Add(defaultAPITokenTTL).Format(time.RFC3339))
+	createReq := httptest.NewRequest(http.MethodPost, "/ui/api-tokens", strings.NewReader(form.Encode()))
+	createReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	createReq.AddCookie(&http.Cookie{Name: "bap_web_session", Value: devSess.ID})
+	createRR := httptest.NewRecorder()
+	a.Router().ServeHTTP(createRR, createReq)
+	if createRR.Code != http.StatusOK || !strings.Contains(createRR.Body.String(), "Token Secret") || !strings.Contains(createRR.Body.String(), "bap_") {
+		t.Fatalf("user token create page = %d, body = %s", createRR.Code, createRR.Body.String())
 	}
 }
 
@@ -1445,6 +1592,32 @@ func newAuthenticatedTestAppWithRole(t *testing.T, isAdmin bool) (*App, model.Se
 		t.Fatal(err)
 	}
 	return a, sess
+}
+
+func addTestUser(t *testing.T, a *App, id, username string, isAdmin bool) model.User {
+	t.Helper()
+	u := model.User{ID: id, Username: username, PasswordHash: []byte("hash"), IsAdmin: isAdmin, CreatedAt: time.Now().UTC()}
+	if err := a.store.CreateUser(context.Background(), u); err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+func addTestSession(t *testing.T, a *App, id string, u model.User) model.Session {
+	t.Helper()
+	now := time.Now().UTC()
+	sess := model.Session{
+		ID:         id,
+		UserID:     u.ID,
+		CSRFToken:  id + "-csrf",
+		CreatedAt:  now,
+		LastSeenAt: now,
+		ExpiresAt:  now.Add(time.Hour),
+	}
+	if err := a.store.CreateSession(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+	return sess
 }
 
 func createTestVM(t *testing.T, a *App, vm model.VM) {

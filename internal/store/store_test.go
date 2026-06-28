@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -37,12 +38,13 @@ func TestUserSessionAndVM(t *testing.T) {
 		t.Fatalf("unexpected user: %#v", got)
 	}
 	token := model.APIToken{
-		ID:        "tok1",
-		Name:      "agent",
-		Prefix:    "bap_deadbeef",
-		IsAdmin:   true,
-		CreatedBy: "admin",
-		CreatedAt: time.Now(),
+		ID:          "tok1",
+		Name:        "agent",
+		Prefix:      "bap_deadbeef",
+		IsAdmin:     true,
+		OwnerUserID: u.ID,
+		CreatedBy:   "admin",
+		CreatedAt:   time.Now(),
 	}
 	if err := st.CreateAPIToken(ctx, token, "hash1"); err != nil {
 		t.Fatal(err)
@@ -51,8 +53,15 @@ func TestUserSessionAndVM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotToken == nil || gotToken.Name != "agent" || !gotToken.IsAdmin {
+	if gotToken == nil || gotToken.Name != "agent" || !gotToken.IsAdmin || gotToken.OwnerUsername != "admin" {
 		t.Fatalf("unexpected api token: %#v", gotToken)
+	}
+	userTokens, err := st.ListAPITokensByOwner(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(userTokens) != 1 || userTokens[0].ID != "tok1" {
+		t.Fatalf("unexpected owner tokens: %#v", userTokens)
 	}
 	if err := st.TouchAPIToken(ctx, "tok1"); err != nil {
 		t.Fatal(err)
@@ -273,5 +282,71 @@ func TestUserSessionAndVM(t *testing.T) {
 	}
 	if len(policies) != 1 || policies[0].Name != "web" {
 		t.Fatalf("unexpected egress policies: %#v", policies)
+	}
+}
+
+func TestAPITokenMigrationBackfillsOwnerAndAllowsPerOwnerNames(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.ExecContext(ctx, `
+		CREATE TABLE users (
+			id TEXT PRIMARY KEY,
+			username TEXT NOT NULL UNIQUE,
+			password_hash BLOB NOT NULL,
+			is_admin INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL
+		);
+		CREATE TABLE api_tokens (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			token_hash TEXT NOT NULL UNIQUE,
+			prefix TEXT NOT NULL,
+			is_admin INTEGER NOT NULL DEFAULT 0,
+			created_by TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			last_used_at TEXT,
+			expires_at TEXT,
+			revoked_at TEXT
+		);
+		INSERT INTO users (id, username, password_hash, is_admin, created_at)
+		VALUES ('u1', 'admin', x'00', 1, '2026-01-01T00:00:00Z'),
+		       ('u2', 'dev', x'00', 0, '2026-01-01T00:00:00Z');
+		INSERT INTO api_tokens (id, name, token_hash, prefix, is_admin, created_by, created_at)
+		VALUES ('tok1', 'agent', 'hash1', 'bap_deadbeef', 1, 'admin', '2026-01-01T00:00:00Z');
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	got, err := st.GetAPITokenByHash(ctx, "hash1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.OwnerUserID != "u1" || got.OwnerUsername != "admin" {
+		t.Fatalf("expected migrated owner, got %#v", got)
+	}
+	err = st.CreateAPIToken(ctx, model.APIToken{
+		ID:          "tok2",
+		Name:        "agent",
+		Prefix:      "bap_feedface",
+		OwnerUserID: "u2",
+		CreatedBy:   "admin",
+		CreatedAt:   time.Now(),
+	}, "hash2")
+	if err != nil {
+		t.Fatalf("expected same token name for a different owner to work: %v", err)
 	}
 }

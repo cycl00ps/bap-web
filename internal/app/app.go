@@ -47,11 +47,14 @@ type requestUser struct {
 	Username string
 	IsAdmin  bool
 	CSRF     string
+	IsToken  bool
 }
 
 type contextKey string
 
 const userKey contextKey = "user"
+
+const defaultAPITokenTTL = 30 * 24 * time.Hour
 
 func New(cfg *config.Config) (*App, error) {
 	if err := ensureDirs(cfg); err != nil {
@@ -129,11 +132,14 @@ func (a *App) Router() http.Handler {
 	mux.HandleFunc("POST /logout", a.requireAuth(a.logoutPost))
 	mux.HandleFunc("GET /", a.requireAuth(a.dashboard))
 	mux.HandleFunc("GET /ssh-keys", a.requireAuth(a.sshKeysPage))
+	mux.HandleFunc("GET /tokens", a.requireAuth(a.apiTokensPage))
 	mux.HandleFunc("GET /images", a.requireAuth(a.requireAdmin(a.imagesPage)))
 	mux.HandleFunc("GET /kernels", a.requireAuth(a.requireAdmin(a.kernelsPage)))
 	mux.HandleFunc("POST /ui/ssh-keys/generate", a.requireAuth(a.uiSSHKeyGenerate))
 	mux.HandleFunc("POST /ui/ssh-keys/import", a.requireAuth(a.uiSSHKeyImport))
 	mux.HandleFunc("POST /ui/ssh-keys/{id}/delete", a.requireAuth(a.uiSSHKeyDelete))
+	mux.HandleFunc("POST /ui/api-tokens", a.requireAuth(a.uiAPITokenCreate))
+	mux.HandleFunc("POST /ui/api-tokens/{id}/action", a.requireAuth(a.uiAPITokenAction))
 	mux.HandleFunc("POST /ui/base-images/register", a.requireAuth(a.requireAdmin(a.uiBaseImageRegister)))
 	mux.HandleFunc("POST /ui/base-images/build", a.requireAuth(a.requireAdmin(a.uiBaseImageBuild)))
 	mux.HandleFunc("POST /ui/base-images/{id}/action", a.requireAuth(a.requireAdmin(a.uiBaseImageAction)))
@@ -168,9 +174,10 @@ func (a *App) Router() http.Handler {
 	mux.HandleFunc("GET /vms/{id}", a.requireAuth(a.vmDetail))
 	mux.HandleFunc("GET /api/health", a.apiHealth)
 	mux.HandleFunc("GET /api/session", a.requireAuth(a.apiSession))
-	mux.HandleFunc("GET /api/tokens", a.requireAuth(a.requireAdmin(a.apiTokenList)))
-	mux.HandleFunc("POST /api/tokens", a.requireAuth(a.requireAdmin(a.apiTokenCreate)))
-	mux.HandleFunc("DELETE /api/tokens/{id}", a.requireAuth(a.requireAdmin(a.apiTokenRevoke)))
+	mux.HandleFunc("GET /api/tokens", a.requireAuth(a.apiTokenList))
+	mux.HandleFunc("POST /api/tokens", a.requireAuth(a.apiTokenCreate))
+	mux.HandleFunc("DELETE /api/tokens/{id}", a.requireAuth(a.apiTokenRevoke))
+	mux.HandleFunc("GET /api/users", a.requireAuth(a.requireAdmin(a.apiUserList)))
 	mux.HandleFunc("GET /api/host/status", a.requireAuth(a.apiHostStatus))
 	mux.HandleFunc("GET /api/host/orphans", a.requireAuth(a.apiHostOrphans))
 	mux.HandleFunc("POST /api/host/orphans/cleanup", a.requireAuth(a.apiHostOrphansCleanup))
@@ -437,7 +444,14 @@ func (a *App) currentTokenUser(ctx context.Context, secret string) (*requestUser
 		return nil, false, nil
 	}
 	_ = a.store.TouchAPIToken(ctx, token.ID)
-	return &requestUser{ID: token.ID, Username: "token:" + token.Name, IsAdmin: token.IsAdmin}, true, nil
+	if token.OwnerUserID == "" {
+		return &requestUser{ID: token.ID, Username: "token:" + token.Name, IsAdmin: token.IsAdmin, IsToken: true}, true, nil
+	}
+	owner, err := a.store.UserByID(ctx, token.OwnerUserID)
+	if err != nil || owner == nil {
+		return nil, false, err
+	}
+	return &requestUser{ID: owner.ID, Username: owner.Username, IsAdmin: token.IsAdmin && owner.IsAdmin, IsToken: true}, true, nil
 }
 
 func (a *App) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
@@ -541,6 +555,10 @@ func (a *App) writeAPIError(w http.ResponseWriter, r *http.Request, status int, 
 func classifyError(err error) (int, string, map[string]string) {
 	if err == nil {
 		return http.StatusInternalServerError, "internal", nil
+	}
+	var appErr *appHTTPError
+	if errors.As(err, &appErr) {
+		return appErr.status, appErr.code, appErr.fields
 	}
 	var domain *lifecycle.DomainError
 	if errors.As(err, &domain) {
@@ -809,6 +827,124 @@ func (a *App) uiSSHKeyDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = a.store.Audit(r.Context(), current(r).Username, sourceIP(r), "ssh_key_delete", "ssh-key:"+id, "success", reqID(r), "")
 	http.Redirect(w, r, "/ssh-keys", http.StatusSeeOther)
+}
+
+type apiTokenForm struct {
+	Name        string
+	OwnerUserID string
+	IsAdmin     bool
+	ExpiresAt   string
+}
+
+type apiTokenView struct {
+	model.APIToken
+	Status string
+	Scope  string
+}
+
+func (a *App) apiTokensPage(w http.ResponseWriter, r *http.Request) {
+	a.renderAPITokensPage(w, r, nil)
+}
+
+func (a *App) renderAPITokensPage(w http.ResponseWriter, r *http.Request, data map[string]any) {
+	if data == nil {
+		data = map[string]any{}
+	}
+	var (
+		tokens []model.APIToken
+		err    error
+	)
+	if current(r).IsAdmin {
+		tokens, err = a.store.ListAPITokens(r.Context())
+	} else {
+		tokens, err = a.store.ListAPITokensByOwner(r.Context(), current(r).ID)
+	}
+	if err != nil {
+		data["Error"] = err.Error()
+	}
+	users := []model.User{}
+	if current(r).IsAdmin {
+		users, err = a.store.ListUsers(r.Context())
+		if err != nil {
+			data["Error"] = err.Error()
+		}
+	}
+	if _, ok := data["Form"]; !ok {
+		data["Form"] = defaultAPITokenForm(current(r))
+	}
+	data["Title"] = "API Tokens"
+	data["User"] = current(r)
+	data["Tokens"] = apiTokenViews(tokens)
+	data["Users"] = users
+	a.render(w, "api_tokens.html", data)
+}
+
+func defaultAPITokenForm(u *requestUser) apiTokenForm {
+	return apiTokenForm{
+		OwnerUserID: u.ID,
+		ExpiresAt:   time.Now().UTC().Add(defaultAPITokenTTL).Format(time.RFC3339),
+	}
+}
+
+func apiTokenViews(tokens []model.APIToken) []apiTokenView {
+	out := make([]apiTokenView, 0, len(tokens))
+	now := time.Now().UTC()
+	for _, token := range tokens {
+		scope := "user"
+		if token.IsAdmin {
+			scope = "admin"
+		}
+		out = append(out, apiTokenView{APIToken: token, Status: apiTokenStatus(token, now), Scope: scope})
+	}
+	return out
+}
+
+func apiTokenStatus(token model.APIToken, now time.Time) string {
+	if token.RevokedAt != nil {
+		return "revoked"
+	}
+	if token.ExpiresAt != nil && !token.ExpiresAt.After(now) {
+		return "expired"
+	}
+	return "active"
+}
+
+func (a *App) uiAPITokenCreate(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	form := apiTokenForm{
+		Name:        strings.TrimSpace(r.FormValue("name")),
+		OwnerUserID: strings.TrimSpace(r.FormValue("owner_user_id")),
+		IsAdmin:     r.FormValue("is_admin") == "true",
+		ExpiresAt:   strings.TrimSpace(r.FormValue("expires_at")),
+	}
+	admin := form.IsAdmin
+	token, secret, err := a.createAPIToken(r.Context(), current(r), APITokenCreateRequest{
+		Name:        form.Name,
+		OwnerUserID: form.OwnerUserID,
+		IsAdmin:     &admin,
+		ExpiresAt:   form.ExpiresAt,
+	})
+	if err != nil {
+		a.renderAPITokensPage(w, r, map[string]any{"Error": err.Error(), "Form": form})
+		return
+	}
+	_ = a.store.Audit(r.Context(), current(r).Username, sourceIP(r), "api_token_create", "api-token:"+token.ID, "success", reqID(r), "")
+	a.renderAPITokensPage(w, r, map[string]any{"CreatedToken": token, "Secret": secret})
+}
+
+func (a *App) uiAPITokenAction(w http.ResponseWriter, r *http.Request) {
+	action := strings.TrimSpace(r.FormValue("action"))
+	if action != "revoke" {
+		a.renderAPITokensPage(w, r, map[string]any{"Error": "Unknown token action"})
+		return
+	}
+	id := r.PathValue("id")
+	if err := a.revokeAPIToken(r.Context(), current(r), id); err != nil {
+		a.renderAPITokensPage(w, r, map[string]any{"Error": err.Error()})
+		return
+	}
+	_ = a.store.Audit(r.Context(), current(r).Username, sourceIP(r), "api_token_revoke", "api-token:"+id, "success", reqID(r), "")
+	http.Redirect(w, r, "/tokens", http.StatusSeeOther)
 }
 
 func (a *App) imagesPage(w http.ResponseWriter, r *http.Request) {
@@ -1661,13 +1797,56 @@ func (a *App) apiSession(w http.ResponseWriter, r *http.Request) {
 }
 
 type APITokenCreateRequest struct {
-	Name      string `json:"name"`
-	IsAdmin   *bool  `json:"is_admin"`
-	ExpiresAt string `json:"expires_at"`
+	Name        string `json:"name"`
+	OwnerUserID string `json:"owner_user_id"`
+	IsAdmin     *bool  `json:"is_admin"`
+	ExpiresAt   string `json:"expires_at"`
+}
+
+type apiUserResponse struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+	IsAdmin  bool   `json:"is_admin"`
+}
+
+type appHTTPError struct {
+	status  int
+	code    string
+	message string
+	fields  map[string]string
+}
+
+func (e *appHTTPError) Error() string {
+	return e.message
+}
+
+func forbidden(message string) error {
+	return &appHTTPError{status: http.StatusForbidden, code: "forbidden", message: message}
+}
+
+func (a *App) apiUserList(w http.ResponseWriter, r *http.Request) {
+	users, err := a.store.ListUsers(r.Context())
+	if err != nil {
+		a.apiError(w, r, err)
+		return
+	}
+	out := make([]apiUserResponse, 0, len(users))
+	for _, u := range users {
+		out = append(out, apiUserResponse{ID: u.ID, Username: u.Username, IsAdmin: u.IsAdmin})
+	}
+	a.json(w, http.StatusOK, out)
 }
 
 func (a *App) apiTokenList(w http.ResponseWriter, r *http.Request) {
-	tokens, err := a.store.ListAPITokens(r.Context())
+	var (
+		tokens []model.APIToken
+		err    error
+	)
+	if current(r).IsAdmin {
+		tokens, err = a.store.ListAPITokens(r.Context())
+	} else {
+		tokens, err = a.store.ListAPITokensByOwner(r.Context(), current(r).ID)
+	}
 	if err != nil {
 		a.apiError(w, r, err)
 		return
@@ -1682,40 +1861,8 @@ func (a *App) apiTokenCreate(w http.ResponseWriter, r *http.Request) {
 		a.writeAPIError(w, r, http.StatusBadRequest, "bad_request", err.Error(), nil)
 		return
 	}
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		a.apiError(w, r, lifecycle.Invalid("Token name is required", map[string]string{"name": "required"}))
-		return
-	}
-	admin := true
-	if req.IsAdmin != nil {
-		admin = *req.IsAdmin
-	}
-	var expiresAt *time.Time
-	if strings.TrimSpace(req.ExpiresAt) != "" {
-		t, err := time.Parse(time.RFC3339, strings.TrimSpace(req.ExpiresAt))
-		if err != nil {
-			a.apiError(w, r, lifecycle.Invalid("Token expiry is invalid", map[string]string{"expires_at": "must be RFC3339"}))
-			return
-		}
-		t = t.UTC()
-		expiresAt = &t
-	}
-	secret := "bap_" + random.Hex(32)
-	prefix := secret
-	if len(prefix) > 16 {
-		prefix = prefix[:16]
-	}
-	token := model.APIToken{
-		ID:        random.Hex(16),
-		Name:      name,
-		Prefix:    prefix,
-		IsAdmin:   admin,
-		CreatedBy: current(r).Username,
-		CreatedAt: time.Now().UTC(),
-		ExpiresAt: expiresAt,
-	}
-	if err := a.store.CreateAPIToken(r.Context(), token, hashAPIToken(secret)); err != nil {
+	token, secret, err := a.createAPIToken(r.Context(), current(r), req)
+	if err != nil {
 		a.apiError(w, r, err)
 		return
 	}
@@ -1723,14 +1870,101 @@ func (a *App) apiTokenCreate(w http.ResponseWriter, r *http.Request) {
 	a.json(w, http.StatusCreated, map[string]any{"token": token, "secret": secret})
 }
 
+func (a *App) createAPIToken(ctx context.Context, actor *requestUser, req APITokenCreateRequest) (model.APIToken, string, error) {
+	if actor.IsToken && !actor.IsAdmin {
+		return model.APIToken{}, "", forbidden("non-admin bearer tokens cannot create API tokens")
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		return model.APIToken{}, "", lifecycle.Invalid("Token name is required", map[string]string{"name": "required"})
+	}
+	admin := false
+	if req.IsAdmin != nil {
+		admin = *req.IsAdmin
+	}
+	ownerID := strings.TrimSpace(req.OwnerUserID)
+	if actor.IsAdmin {
+		if ownerID == "" {
+			ownerID = actor.ID
+		}
+	} else {
+		if ownerID != "" && ownerID != actor.ID {
+			return model.APIToken{}, "", forbidden("users can only create API tokens for themselves")
+		}
+		if admin {
+			return model.APIToken{}, "", forbidden("users cannot create admin API tokens")
+		}
+		ownerID = actor.ID
+	}
+	owner, err := a.store.UserByID(ctx, ownerID)
+	if err != nil {
+		return model.APIToken{}, "", err
+	}
+	if owner == nil {
+		return model.APIToken{}, "", lifecycle.NotFound("Token owner user not found")
+	}
+	if admin && !owner.IsAdmin {
+		return model.APIToken{}, "", lifecycle.Invalid("Admin API tokens can only be created for admin users", map[string]string{"is_admin": "owner is not an admin user"})
+	}
+	var expiresAt *time.Time
+	if strings.TrimSpace(req.ExpiresAt) != "" {
+		t, err := time.Parse(time.RFC3339, strings.TrimSpace(req.ExpiresAt))
+		if err != nil {
+			return model.APIToken{}, "", lifecycle.Invalid("Token expiry is invalid", map[string]string{"expires_at": "must be RFC3339"})
+		}
+		t = t.UTC()
+		expiresAt = &t
+	} else {
+		t := time.Now().UTC().Add(defaultAPITokenTTL)
+		expiresAt = &t
+	}
+	if expiresAt != nil && !expiresAt.After(time.Now().UTC()) {
+		return model.APIToken{}, "", lifecycle.Invalid("Token expiry must be in the future", map[string]string{"expires_at": "must be in the future"})
+	}
+	secret := "bap_" + random.Hex(32)
+	prefix := secret
+	if len(prefix) > 16 {
+		prefix = prefix[:16]
+	}
+	token := model.APIToken{
+		ID:            random.Hex(16),
+		Name:          name,
+		Prefix:        prefix,
+		IsAdmin:       admin,
+		OwnerUserID:   owner.ID,
+		OwnerUsername: owner.Username,
+		CreatedBy:     actor.Username,
+		CreatedAt:     time.Now().UTC(),
+		ExpiresAt:     expiresAt,
+	}
+	if err := a.store.CreateAPIToken(ctx, token, hashAPIToken(secret)); err != nil {
+		return model.APIToken{}, "", err
+	}
+	return token, secret, nil
+}
+
 func (a *App) apiTokenRevoke(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := a.store.RevokeAPIToken(r.Context(), id); err != nil {
+	if err := a.revokeAPIToken(r.Context(), current(r), id); err != nil {
 		a.apiError(w, r, err)
 		return
 	}
 	_ = a.store.Audit(r.Context(), current(r).Username, sourceIP(r), "api_token_revoke", "api-token:"+id, "success", reqID(r), "")
 	a.json(w, http.StatusOK, map[string]any{"revoked": id})
+}
+
+func (a *App) revokeAPIToken(ctx context.Context, actor *requestUser, id string) error {
+	token, err := a.store.GetAPITokenByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if token == nil {
+		return lifecycle.NotFound("API token not found")
+	}
+	if !actor.IsAdmin && (token.OwnerUserID == "" || token.OwnerUserID != actor.ID) {
+		return forbidden("users can only revoke their own API tokens")
+	}
+	return a.store.RevokeAPIToken(ctx, id)
 }
 
 func (a *App) apiHostStatus(w http.ResponseWriter, r *http.Request) {

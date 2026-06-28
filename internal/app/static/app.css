@@ -58,6 +58,8 @@ th { background: #eef3f5; font-size: 13px; color: #40505b; }
 .state.running { background: #dbf2df; color: #155724; }
 .state.succeeded { background: #dbf2df; color: #155724; }
 .state.failed, .state.error { background: #f8d7da; color: #721c24; }
+.state.active { background: #dbf2df; color: #155724; }
+.state.revoked, .state.expired { background: #f8d7da; color: #721c24; }
 .facts { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 8px 16px; }
 .facts dt { font-weight: 700; color: #40505b; }
 .facts dd { margin: 0; overflow-wrap: anywhere; }
