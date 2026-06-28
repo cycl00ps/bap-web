@@ -1,0 +1,55 @@
+{{define "vms_table.html"}}
+{{if .TableError}}
+<div class="notice error">{{.TableError}}</div>
+{{end}}
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>State</th>
+      <th>CPU</th>
+      <th>Memory</th>
+      <th>Network</th>
+      <th>Guest IP</th>
+      <th>SSH Port</th>
+      <th>Egress</th>
+      <th>Last Error</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .VMs}}
+    <tr>
+      <td><a href="/vms/{{.ID}}">{{.Name}}</a></td>
+      <td><span class="state {{.State}}">{{.State}}</span></td>
+      <td>{{.VCPUCount}}</td>
+      <td>{{.MemMiB}} MiB</td>
+      <td>{{.NetworkMode}}</td>
+      <td>{{.GuestIP}}</td>
+      <td>{{.SSHPort}}</td>
+      <td>{{if .EgressPolicyID}}policy{{else}}{{.EgressMode}}{{end}}</td>
+      <td class="error-cell">{{.LastError}}</td>
+      <td class="actions">
+        <form method="post" action="/ui/vms/{{.ID}}/action" hx-post="/ui/vms/{{.ID}}/action" hx-target="#vms-table" hx-swap="innerHTML" class="action-select-form" data-confirm-delete="Delete this VM?">
+          <input type="hidden" name="csrf" value="{{$.User.CSRF}}">
+          <select name="action" aria-label="VM action">
+            {{if eq .State "running"}}
+            <option value="stop">Stop</option>
+            {{else}}
+            <option value="start">Start</option>
+            {{end}}
+            <option value="restart">Restart</option>
+            <option value="delete">Delete</option>
+          </select>
+          <button class="secondary" type="submit">Confirm</button>
+        </form>
+      </td>
+    </tr>
+  {{else}}
+    <tr><td colspan="10">No VMs yet.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{end}}

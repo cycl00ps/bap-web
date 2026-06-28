@@ -1,0 +1,66 @@
+{{template "base_start" .}}
+<section class="grid">
+  <div>
+    <h1>SSH Keys</h1>
+    {{if .Error}}
+    <div class="notice error">{{.Error}}</div>
+    {{end}}
+    {{if .PrivateKey}}
+    <div class="notice warning">
+      <h2>Private Key Export</h2>
+      <p>This private key is shown once. BAP Web stores only the public key and cannot recover this private key later.</p>
+      <textarea class="key-export" readonly>{{.PrivateKey}}</textarea>
+    </div>
+    {{end}}
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Fingerprint</th>
+          <th>Created</th>
+          <th>Last Used</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+      {{range .SSHKeys}}
+        <tr>
+          <td>{{.Name}}</td>
+          <td>{{.KeyType}}</td>
+          <td><code>{{.Fingerprint}}</code></td>
+          <td>{{.CreatedAt}}</td>
+          <td>{{if .LastUsedAt}}{{.LastUsedAt}}{{else}}never{{end}}</td>
+          <td>
+            <form method="post" action="/ui/ssh-keys/{{.ID}}/delete">
+              <input type="hidden" name="csrf" value="{{$.User.CSRF}}">
+              <button type="submit">Delete</button>
+            </form>
+          </td>
+        </tr>
+      {{else}}
+        <tr><td colspan="6">No SSH keys yet.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    </div>
+  </div>
+  <aside class="panel">
+    <h2>Generate Key</h2>
+    <form method="post" action="/ui/ssh-keys/generate" class="stack">
+      <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+      <label>Name <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}"></label>
+      <button type="submit">Generate</button>
+    </form>
+    <hr>
+    <h2>Import Public Key</h2>
+    <form method="post" action="/ui/ssh-keys/import" class="stack">
+      <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+      <label>Name <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}"></label>
+      <label>Public key <textarea name="public_key" rows="5" required></textarea></label>
+      <button type="submit">Import</button>
+    </form>
+  </aside>
+</section>
+{{template "base_end" .}}

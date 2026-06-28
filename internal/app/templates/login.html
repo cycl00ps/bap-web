@@ -1,0 +1,11 @@
+{{template "base_start" .}}
+<section class="auth">
+  <h1>Login</h1>
+  <form method="post" action="/login" class="stack">
+    <label>Username <input name="username" required autocomplete="username"></label>
+    <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
+    <button type="submit">Login</button>
+  </form>
+</section>
+{{template "base_end" .}}
+

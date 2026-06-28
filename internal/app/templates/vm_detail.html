@@ -1,0 +1,234 @@
+{{template "base_start" .}}
+<section class="page-head">
+  <div>
+    <h1>{{.VM.Name}}</h1>
+    <p class="hint">{{.VM.ID}} · {{.VM.NetworkMode}} · {{.VM.GuestIP}}</p>
+  </div>
+  <div class="actions">
+    {{if eq .VM.State "running"}}
+    <form method="post" action="/ui/vms/{{.VM.ID}}/stop?redirect=detail">
+      <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+      <button class="secondary" type="submit">Stop</button>
+    </form>
+    {{else}}
+    <form method="post" action="/ui/vms/{{.VM.ID}}/start?redirect=detail">
+      <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+      <button type="submit">Start</button>
+    </form>
+    {{end}}
+    <form method="post" action="/ui/vms/{{.VM.ID}}/restart?redirect=detail">
+      <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+      <button class="secondary" type="submit">Restart</button>
+    </form>
+    <form method="post" action="/ui/vms/{{.VM.ID}}/delete?redirect=detail">
+      <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+      <button class="secondary danger" type="submit">Delete</button>
+    </form>
+  </div>
+</section>
+
+{{if .DetailError}}
+<div class="notice error">{{.DetailError}}</div>
+{{end}}
+
+<nav class="tabs">
+  <a href="#overview">Overview</a>
+  <a href="#shell">Shell</a>
+  <a href="#networking">Networking</a>
+  <a href="#resources">Resources</a>
+  <a href="#logs">Logs</a>
+</nav>
+
+<section id="overview" class="detail-section">
+  <h2>Overview</h2>
+  <dl class="facts">
+    <dt>State</dt><dd><span class="state {{.VM.State}}">{{.VM.State}}</span></dd>
+    <dt>CPU</dt><dd>{{.VM.VCPUCount}}</dd>
+    <dt>Memory</dt><dd>{{.VM.MemMiB}} MiB</dd>
+    <dt>Guest IP</dt><dd>{{.VM.GuestIP}}/{{.VM.CIDR}}</dd>
+    <dt>Host gateway</dt><dd>{{.VM.HostIP}}</dd>
+    <dt>LAN SSH port</dt><dd>{{.VM.SSHPort}}</dd>
+    <dt>SSH key</dt><dd>{{if .SSHKey}}{{.SSHKey.Name}} ({{.SSHKey.Fingerprint}}){{else}}extra authorized keys only{{end}}</dd>
+    <dt>External SSH</dt><dd>ssh -i &lt;private-key-file&gt; {{.VM.DevUser}}@&lt;host-lan-ip&gt; -p {{.VM.SSHPort}}</dd>
+    <dt>Rootfs</dt><dd>{{.VM.RootFSPath}}</dd>
+    <dt>Kernel</dt><dd>{{.VM.KernelPath}}{{if .VM.KernelID}}<br><span class="hint">{{.VM.KernelID}}</span>{{end}}</dd>
+    <dt>Repo</dt><dd>{{.VM.RepoURL}}</dd>
+    <dt>Git ref</dt><dd>{{.VM.GitRef}}</dd>
+    <dt>Last error</dt><dd>{{.VM.LastError}}</dd>
+  </dl>
+</section>
+
+<section id="shell" class="detail-section">
+  <h2>Shell</h2>
+  <div id="terminal-shell" class="terminal-shell">
+    <div id="terminal" class="terminal"></div>
+  </div>
+  <form id="term-form" class="terminal-input" hidden>
+    <input id="term-input" autocomplete="off" placeholder="Type command input and press enter">
+    <button type="submit">Send</button>
+  </form>
+  <script src="/static/vendor/xterm/xterm.js"></script>
+  <script>
+    const box = document.getElementById('terminal');
+    const shell = document.getElementById('terminal-shell');
+    const form = document.getElementById('term-form');
+    const input = document.getElementById('term-input');
+    const term = window.Terminal ? new Terminal({cursorBlink: true, scrollback: 1000}) : null;
+    const cell = {width: 9, height: 18};
+    const terminalSize = () => {
+      const rect = shell.getBoundingClientRect();
+      return {
+        cols: Math.max(20, Math.floor((rect.width - 4) / cell.width)),
+        rows: Math.max(8, Math.floor((rect.height - 4) / cell.height)),
+      };
+    };
+    const applyTerminalSize = () => {
+      if (!term) return terminalSize();
+      const size = terminalSize();
+      if (term.cols !== size.cols || term.rows !== size.rows) {
+        term.resize(size.cols, size.rows);
+        if (typeof term.refresh === 'function') term.refresh(0, term.rows - 1);
+      }
+      return size;
+    };
+    if (term) {
+      term.open(box);
+      const dims = box.querySelector('.xterm-screen');
+      if (dims) {
+        const rect = dims.getBoundingClientRect();
+        if (term.cols > 0) cell.width = Math.max(1, rect.width / term.cols);
+        if (term.rows > 0) cell.height = Math.max(1, rect.height / term.rows);
+      }
+    } else {
+      box.classList.add('terminal-fallback');
+      form.hidden = false;
+    }
+    const initialSize = applyTerminalSize();
+    const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/vms/{{.VM.ID}}/terminal?cols=${initialSize.cols}&rows=${initialSize.rows}`);
+    ws.binaryType = 'arraybuffer';
+    const sendResize = () => {
+      const size = applyTerminalSize();
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: "resize", cols: size.cols, rows: size.rows}));
+    };
+    ws.onmessage = ev => {
+      let text = typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data);
+      if (term) term.write(text);
+      else {
+        box.textContent += text;
+        box.scrollTop = box.scrollHeight;
+      }
+    };
+    ws.onopen = sendResize;
+    if (term) term.onData(data => { if (ws.readyState === WebSocket.OPEN) ws.send(data); });
+    let resizeTimer = null;
+    const scheduleResize = () => {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(sendResize, 100);
+    };
+    window.addEventListener('resize', scheduleResize);
+    if (window.ResizeObserver) new ResizeObserver(scheduleResize).observe(shell);
+    form.addEventListener('submit', ev => {
+      ev.preventDefault();
+      if (ws.readyState === WebSocket.OPEN) ws.send(input.value + "\n");
+      input.value = "";
+    });
+  </script>
+</section>
+
+<section id="networking" class="detail-section">
+  <h2>Networking</h2>
+  <dl class="facts">
+    <dt>Mode</dt><dd>{{.VM.NetworkMode}}</dd>
+    <dt>Shared network</dt><dd>{{if .Network}}{{.Network.Name}} {{.Network.CIDR}}{{else}}none{{end}}</dd>
+    <dt>Host gateway</dt><dd>{{.VM.HostIP}}</dd>
+    <dt>Guest IP</dt><dd>{{.VM.GuestIP}}/{{.VM.CIDR}}</dd>
+    <dt>Built-in SSH ingress</dt><dd>tcp {{.VM.SSHPort}} on host to guest port 22</dd>
+    <dt>Egress</dt><dd>{{if .EgressPolicy}}{{.EgressPolicy.Name}} ({{.EgressPolicy.Mode}}){{else}}{{.VM.EgressMode}}{{end}}</dd>
+  </dl>
+
+  <h3>Ingress Rules</h3>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Protocol</th><th>Host Port</th><th>Guest Port</th><th>Description</th><th class="table-actions">Actions</th></tr>
+    </thead>
+    <tbody>
+      {{range .IngressRules}}
+      <tr>
+        <td>{{.Protocol}}</td>
+        <td>{{.HostPort}}</td>
+        <td>{{.GuestPort}}</td>
+        <td>{{.Description}}</td>
+        <td class="actions">
+          <form method="post" action="/ui/vms/{{$.VM.ID}}/ingress-rules/{{.ID}}/delete">
+            <input type="hidden" name="csrf" value="{{$.User.CSRF}}">
+            <button class="secondary danger" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {{else}}
+      <tr><td colspan="5">No custom ingress rules.</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+  </div>
+
+  <form method="post" action="/ui/vms/{{.VM.ID}}/ingress-rules" class="inline-form">
+    <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+    <label>Protocol
+      <select name="protocol">
+        <option value="tcp">TCP</option>
+        <option value="udp">UDP</option>
+      </select>
+    </label>
+    <label>Host port <input name="host_port" type="number" min="1" max="65535" required></label>
+    <label>Guest port <input name="guest_port" type="number" min="1" max="65535" required></label>
+    <label>Description <input name="description"></label>
+    <button type="submit">Add Ingress</button>
+  </form>
+
+  <h3>Egress Policy</h3>
+  <form method="post" action="/ui/vms/{{.VM.ID}}/egress-policy" class="inline-form">
+    <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+    <label>Mode
+      <select name="egress_mode">
+        <option value="allow_all" {{if eq .VM.EgressMode "allow_all"}}selected{{end}}>Allow all</option>
+        <option value="deny_all" {{if eq .VM.EgressMode "deny_all"}}selected{{end}}>Deny all</option>
+      </select>
+    </label>
+    <label>Reusable policy
+      <select name="egress_policy_id">
+        <option value="">No reusable policy</option>
+        {{range .EgressPolicies}}
+        <option value="{{.ID}}" {{if eq $.VM.EgressPolicyID .ID}}selected{{end}}>{{.Name}} ({{.Mode}})</option>
+        {{end}}
+      </select>
+    </label>
+    <button type="submit">Apply Egress</button>
+  </form>
+</section>
+
+<section id="resources" class="detail-section">
+  <h2>Resources</h2>
+  <form method="post" action="/ui/vms/{{.VM.ID}}/resources" class="inline-form">
+    <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+    <label>vCPU <input name="vcpu_count" type="number" min="1" max="32" value="{{.VM.VCPUCount}}"></label>
+    <label>Memory MiB <input name="mem_mib" type="number" min="128" value="{{.VM.MemMiB}}"></label>
+    <label class="checkbox"><input name="restart" type="checkbox" value="true"> Restart if running</label>
+    <button type="submit">Update Resources</button>
+  </form>
+</section>
+
+<section id="logs" class="detail-section">
+  <h2>Logs</h2>
+  <div class="settings-list">
+    <details class="settings-card log-details">
+      <summary>VM logs</summary>
+      <p class="hint">{{.LogPath}}</p>
+      <pre class="log-view">{{range .LogLines}}{{.}}
+{{else}}No log output yet.
+{{end}}</pre>
+    </details>
+  </div>
+</section>
+{{template "base_end" .}}

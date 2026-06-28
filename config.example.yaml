@@ -1,0 +1,61 @@
+server:
+  bind_address: "127.0.0.1"
+  port: 8080
+  metadata_bind_address: "0.0.0.0"
+  metadata_port: 18080
+  static_dir: "/usr/local/share/bap-web/static"
+  trusted_hosts:
+    - "127.0.0.1:8080"
+    - "localhost:8080"
+  allowed_origins:
+    - "http://127.0.0.1:8080"
+    - "http://localhost:8080"
+
+database:
+  driver: "sqlite"
+  dsn: "/var/lib/bap-web/bap-web.db"
+
+paths:
+  state_dir: "/var/lib/bap-web"
+  log_dir: "/var/log/bap-web"
+  key_dir: "/var/lib/bap-web/keys"
+  runtime_dir: "/var/lib/bap-web/runtime"
+  image_dir: "/var/lib/microvms"
+  kernel_dir: "/var/lib/microvms/kernels"
+  kernel_image: "/var/lib/microvms/kernels/vmlinux-5.10.bin"
+  base_image_dir: "/var/lib/microvms/base"
+  base_rootfs: "/var/lib/microvms/base/base-rootfs.ext4"
+  jailer_base_dir: "/srv/jailer"
+  firecracker_bin: "/usr/local/bin/firecracker"
+  jailer_bin: "/usr/local/bin/jailer"
+
+network:
+  backend: "nftables"
+  vm_cidr: "172.31.0.0/16"
+  ssh_port_range: "20000-29999"
+  default_network_mode: "routed_ptp"
+  protected_host_cidrs:
+    - "127.0.0.0/8"
+    - "169.254.169.254/32"
+
+security:
+  session_idle_timeout: "30m"
+  session_absolute_timeout: "12h"
+  terminal_recording: "metadata"
+
+images:
+  build_dir: "/var/lib/bap-web/image-builds"
+  hook_dir: "/var/lib/bap-web/image-hooks"
+  max_base_image_mib: 32768
+  max_vm_rootfs_mib: 65536
+  max_hook_bytes: 262144
+  max_packages: 100
+  build_timeout: "45m"
+  allowed_git_hosts: []
+
+kernels:
+  max_kernel_bytes: 536870912
+  test_timeout: "5m"
+  ci_scan_timeout: "15s"
+  ci_import_timeout: "2m"
+  firecracker_ci_base_url: "https://s3.amazonaws.com/spec.ccfc.min"

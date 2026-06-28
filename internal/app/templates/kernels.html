@@ -1,0 +1,359 @@
+{{template "base_start" .}}
+<section class="page-head">
+  <div>
+    <h1>Kernels</h1>
+    <p class="hint">Manage Firecracker guest kernels and validation tests.</p>
+  </div>
+</section>
+
+{{if .Error}}
+<div class="notice error">{{.Error}}</div>
+{{end}}
+
+<section class="split">
+  <div>
+    <h2>Registered Kernels</h2>
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Name</th><th>Status</th><th>Version</th><th>Arch</th><th>Source</th><th>Checksum</th><th class="table-actions">Actions</th></tr>
+      </thead>
+      <tbody>
+      {{range .Kernels}}
+        <tr>
+          <td>{{.Name}}<br><span class="hint">{{.Path}}</span></td>
+          <td>{{.Status}}</td>
+          <td>{{.Version}}</td>
+          <td>{{.Architecture}}</td>
+          <td>{{.SourceType}}</td>
+          <td><code>{{.Checksum}}</code></td>
+          <td class="actions">
+            <form method="post" action="/ui/kernels/{{.ID}}/test">
+              <input type="hidden" name="csrf" value="{{$.User.CSRF}}">
+              <button class="secondary" type="submit">Test</button>
+            </form>
+            <form method="post" action="/ui/kernels/{{.ID}}/delete">
+              <input type="hidden" name="csrf" value="{{$.User.CSRF}}">
+              <button class="secondary danger" type="submit">Delete</button>
+            </form>
+          </td>
+        </tr>
+      {{else}}
+        <tr><td colspan="7">No kernels registered.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    </div>
+
+    <div class="settings-list">
+      <h3>Kernel Settings</h3>
+      {{range .Kernels}}
+      <details class="settings-card">
+        <summary>{{.Name}} settings</summary>
+        <form method="post" action="/ui/kernels/{{.ID}}/status" class="stack">
+          <input type="hidden" name="csrf" value="{{$.User.CSRF}}">
+          <label>Status
+            <select name="status">
+              <option value="pending" {{if eq .Status "pending"}}selected{{end}}>pending</option>
+              <option value="active" {{if eq .Status "active"}}selected{{end}}>active</option>
+              <option value="failed" {{if eq .Status "failed"}}selected{{end}}>failed</option>
+              <option value="archived" {{if eq .Status "archived"}}selected{{end}}>archived</option>
+            </select>
+          </label>
+          <label>Boot args <textarea name="boot_args" rows="2">{{.BootArgs}}</textarea></label>
+          <button class="secondary" type="submit">Save Settings</button>
+        </form>
+      </details>
+      {{else}}
+      <p class="hint">No kernels registered.</p>
+      {{end}}
+    </div>
+  </div>
+  <aside class="panel">
+    <h2>Firecracker CI</h2>
+    <p class="hint">Refresh scans the configured Firecracker CI bucket for supported host-architecture kernels. Manual browsing starts at <code>{{.FirecrackerCIBaseURL}}?list-type=2&amp;prefix=firecracker-ci/</code>; inspect release folders such as <code>firecracker-ci/v1.15/x86_64/</code> or <code>firecracker-ci/v1.15/aarch64/</code>.</p>
+    <form method="post" action="/ui/kernels/firecracker-ci/scan" class="stack" id="kernel-discovery-scan-form">
+      <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+      <label>CI prefix <input name="ci_prefix" placeholder="latest stable release when blank"></label>
+      <button type="submit" data-discovery-submit>Refresh Firecracker CI kernels</button>
+    </form>
+
+    <h2>Manual Firecracker CI Import</h2>
+    <form method="post" action="/ui/kernels/import-firecracker-ci" class="stack">
+      <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+      <label>Name <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9-]{0,31}" placeholder="fc-6-1"></label>
+      <label>Version <input name="version" required placeholder="6.1.155"></label>
+      <label>CI prefix <input name="ci_prefix" placeholder="latest when blank"></label>
+      <button type="submit">Import</button>
+    </form>
+
+    <h2>Upload Kernel</h2>
+    <form method="post" action="/ui/kernels/upload" enctype="multipart/form-data" class="stack">
+      <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+      <label>Name <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9-]{0,31}"></label>
+      <label>Version <input name="version" placeholder="optional"></label>
+      <label>Kernel file <input name="kernel" type="file" required></label>
+      <label>Config file <input name="config" type="file"></label>
+      <button type="submit">Upload</button>
+    </form>
+  </aside>
+</section>
+
+<section id="kernel-discovery">
+  <h2>Firecracker CI Discovery</h2>
+  {{with .ActiveDiscoveryJob}}
+  <div class="notice scan-status" data-discovery-status-panel data-discovery-job-id="{{.ID}}">
+    <div>
+      <strong>Refresh status</strong>
+      <span class="hint">Scan <code>{{.ID}}</code>{{if .CIPrefix}} · {{.CIPrefix}}{{end}}</span>
+    </div>
+    <dl class="facts compact-facts">
+      <dt>Status</dt><dd data-discovery-panel-status>{{.Status}}</dd>
+      <dt>Items</dt><dd data-discovery-panel-count>{{.ItemCount}}</dd>
+      <dt>State</dt><dd data-discovery-panel-message>{{if eq .Status "queued"}}Queued{{else if eq .Status "running"}}Refreshing{{else if eq .Status "succeeded"}}Complete{{else if eq .Status "failed"}}Failed{{else}}Idle{{end}}</dd>
+      <dt>Error</dt><dd class="error-cell" data-discovery-panel-error>{{.Error}}</dd>
+    </dl>
+  </div>
+  {{end}}
+  <div class="split">
+    <div>
+      <h3>Discovered Kernels</h3>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Version</th><th>Variant</th><th>Arch</th><th>Prefix</th><th class="table-actions">Actions</th></tr>
+        </thead>
+        <tbody>
+        {{range .KernelDiscoveryItems}}
+          <tr>
+            <td>{{.Version}}</td>
+            <td>{{.Variant}}</td>
+            <td>{{.Architecture}}</td>
+            <td>{{.CIPrefix}}</td>
+            <td>
+              {{if .AlreadyRegistered}}
+              <span class="hint">Already registered</span>
+              {{else}}
+              <form method="post" action="/ui/kernels/import-firecracker-ci" class="actions">
+                <input type="hidden" name="csrf" value="{{$.User.CSRF}}">
+                <input type="hidden" name="artifact_id" value="{{.ID}}">
+                <button class="secondary" type="submit">Import</button>
+              </form>
+              {{end}}
+            </td>
+          </tr>
+        {{else}}
+          <tr><td colspan="5">No discovered kernels yet.</td></tr>
+        {{end}}
+        </tbody>
+      </table>
+      </div>
+    </div>
+    <aside class="panel" data-poll-discovery-job="{{.PollDiscoveryJobID}}">
+      <h3>Scan Jobs</h3>
+      {{if .DiscoveryJobID}}<p class="hint">Showing artifacts for scan <code>{{.DiscoveryJobID}}</code>.</p>{{end}}
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>ID</th><th>Status</th><th>Items</th><th>Prefix</th><th>Error</th></tr>
+        </thead>
+        <tbody>
+        {{range .KernelDiscoveryJobs}}
+          <tr id="kernel-discovery-job-{{.ID}}" data-discovery-job-row="{{.ID}}">
+            <td>{{.ID}}</td>
+            <td data-discovery-job-status="{{.ID}}">{{.Status}}</td>
+            <td data-discovery-job-count="{{.ID}}">{{.ItemCount}}</td>
+            <td>{{.CIPrefix}}</td>
+            <td class="error-cell" data-discovery-job-error="{{.ID}}">{{.Error}}</td>
+          </tr>
+        {{else}}
+          <tr><td colspan="5">No scans yet.</td></tr>
+        {{end}}
+        </tbody>
+      </table>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<section class="split" id="kernel-tests" data-open-kernel-test-job="{{.OpenKernelTestJobID}}">
+  <div>
+    <h2>Kernel Test Jobs</h2>
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>ID</th><th>Kernel</th><th>Status</th><th>Kernel release</th><th>Gateway</th><th>Created</th><th class="table-actions">Actions</th></tr>
+      </thead>
+      <tbody>
+      {{range .KernelTestJobs}}
+        <tr id="kernel-test-job-{{.ID}}">
+          <td><code>{{.ID}}</code></td>
+          <td>{{.KernelName}}<br><span class="hint">{{.KernelID}}</span></td>
+          <td><span class="state {{.Status}}">{{.Status}}</span>{{if .Error}}<br><span class="error-cell">{{.Error}}</span>{{end}}</td>
+          <td>{{if .KernelRelease}}{{.KernelRelease}}{{else}}<span class="hint">not reported</span>{{end}}</td>
+          <td><span class="state {{.GatewayStateClass}}">{{.GatewayLabel}}</span></td>
+          <td>{{.CreatedAtText}}</td>
+          <td><button class="secondary" type="button" data-kernel-test-log-toggle="{{.ID}}" data-kernel-test-log-url="/ui/kernel-test-jobs/{{.ID}}/logs?lines=300">View logs</button></td>
+        </tr>
+        <tr class="build-log-row" id="kernel-test-log-row-{{.ID}}" hidden>
+          <td colspan="7">
+            <div class="build-log-panel" id="kernel-test-log-panel-{{.ID}}"></div>
+          </td>
+        </tr>
+      {{else}}
+        <tr><td colspan="7">No kernel tests yet.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</section>
+
+<script>
+(() => {
+  const timers = new Map();
+  const stopPolling = id => {
+    const timer = timers.get(id);
+    if (timer) window.clearTimeout(timer);
+    timers.delete(id);
+  };
+  const loadLogs = async (button, id) => {
+    const panel = document.getElementById(`kernel-test-log-panel-${id}`);
+    if (!panel) return;
+    try {
+      const res = await fetch(button.dataset.kernelTestLogUrl, {credentials: "same-origin"});
+      if (!res.ok) {
+        panel.innerHTML = `<div class="notice error">Unable to load kernel test log (${res.status})</div>`;
+        stopPolling(id);
+        return;
+      }
+      panel.innerHTML = await res.text();
+      const fragment = panel.querySelector("[data-kernel-test-log-fragment]");
+      if (fragment && fragment.dataset.poll === "true") {
+        stopPolling(id);
+        timers.set(id, window.setTimeout(() => loadLogs(button, id), 2000));
+      } else {
+        stopPolling(id);
+      }
+    } catch (err) {
+      panel.innerHTML = `<div class="notice error">Unable to load kernel test log.</div>`;
+      stopPolling(id);
+    }
+  };
+  const openLogs = button => {
+    const id = button.dataset.kernelTestLogToggle;
+    const row = document.getElementById(`kernel-test-log-row-${id}`);
+    if (!id || !row) return;
+    row.hidden = false;
+    button.textContent = "Hide logs";
+    loadLogs(button, id);
+  };
+  const closeLogs = button => {
+    const id = button.dataset.kernelTestLogToggle;
+    const row = document.getElementById(`kernel-test-log-row-${id}`);
+    if (!id || !row) return;
+    row.hidden = true;
+    button.textContent = "View logs";
+    stopPolling(id);
+  };
+  document.querySelectorAll("[data-kernel-test-log-toggle]").forEach(button => {
+    button.addEventListener("click", () => {
+      const row = document.getElementById(`kernel-test-log-row-${button.dataset.kernelTestLogToggle}`);
+      if (row && row.hidden) openLogs(button);
+      else closeLogs(button);
+    });
+  });
+  const container = document.getElementById("kernel-tests");
+  const openID = container ? container.dataset.openKernelTestJob : "";
+  if (openID) {
+    const button = Array.from(document.querySelectorAll("[data-kernel-test-log-toggle]")).find(el => el.dataset.kernelTestLogToggle === openID);
+    if (button) openLogs(button);
+  }
+  const scanForm = document.getElementById("kernel-discovery-scan-form");
+  if (scanForm) {
+    scanForm.addEventListener("submit", () => {
+      const button = scanForm.querySelector("[data-discovery-submit]");
+      if (button) {
+        button.disabled = true;
+        button.textContent = "Starting refresh...";
+      }
+    });
+  }
+  const discoveryPanel = document.querySelector("[data-poll-discovery-job]");
+  const discoveryID = discoveryPanel ? discoveryPanel.dataset.pollDiscoveryJob : "";
+  const statusPanel = document.querySelector("[data-discovery-status-panel]");
+  const panelStatus = statusPanel ? statusPanel.querySelector("[data-discovery-panel-status]") : null;
+  const panelCount = statusPanel ? statusPanel.querySelector("[data-discovery-panel-count]") : null;
+  const panelMessage = statusPanel ? statusPanel.querySelector("[data-discovery-panel-message]") : null;
+  const panelError = statusPanel ? statusPanel.querySelector("[data-discovery-panel-error]") : null;
+  const setDiscoveryMessage = message => {
+    if (panelMessage) panelMessage.textContent = message;
+  };
+  const reloadDiscoveryFindings = id => {
+    const target = "/kernels?discovery_job=" + encodeURIComponent(id) + "#kernel-discovery";
+    const current = window.location.pathname + window.location.search + window.location.hash;
+    if (current === target) {
+      window.location.reload();
+    } else {
+      window.location.replace(target);
+    }
+  };
+  const updateDiscoveryStatus = job => {
+    const status = document.querySelector(`[data-discovery-job-status="${discoveryID}"]`);
+    const count = document.querySelector(`[data-discovery-job-count="${discoveryID}"]`);
+    const error = document.querySelector(`[data-discovery-job-error="${discoveryID}"]`);
+    if (status) status.textContent = job.status;
+    if (count) count.textContent = job.item_count;
+    if (error) error.textContent = job.error || "";
+    if (panelStatus) panelStatus.textContent = job.status;
+    if (panelCount) panelCount.textContent = job.item_count;
+    if (panelError) panelError.textContent = job.error || "";
+    if (job.status === "queued") setDiscoveryMessage("Queued");
+    else if (job.status === "running") setDiscoveryMessage("Refreshing");
+    else if (job.status === "succeeded") setDiscoveryMessage("Complete; loading findings...");
+    else if (job.status === "failed") setDiscoveryMessage("Failed");
+    else setDiscoveryMessage("Idle");
+  };
+  if (discoveryID) {
+    const pollDiscovery = async () => {
+      try {
+        const res = await fetch(`/api/kernels/firecracker-ci/scan-jobs/${discoveryID}`, {credentials: "same-origin"});
+        if (!res.ok) {
+          setDiscoveryMessage(`Unable to check refresh state (${res.status}); retrying...`);
+          window.setTimeout(pollDiscovery, 3000);
+          return;
+        }
+        const job = await res.json();
+        updateDiscoveryStatus(job);
+        if (job.status === "queued" || job.status === "running") {
+          window.setTimeout(pollDiscovery, 2000);
+        } else if (job.status === "succeeded") {
+          window.setTimeout(() => reloadDiscoveryFindings(discoveryID), 750);
+        }
+      } catch (err) {
+        setDiscoveryMessage("Unable to check refresh state; retrying...");
+        window.setTimeout(pollDiscovery, 3000);
+      }
+    };
+    pollDiscovery();
+  }
+})();
+</script>
+{{template "base_end" .}}
+
+{{define "kernel_test_log.html"}}
+<div class="build-log-fragment" data-kernel-test-log-fragment data-poll="{{if .Poll}}true{{else}}false{{end}}">
+  <div class="build-log-head">
+    <div>
+      <strong>{{.Job.ID}}</strong>
+      <span class="hint">{{.Job.Status}}{{if .Job.ResultSummary}} · {{.Job.ResultSummary}}{{end}}</span>
+    </div>
+    {{if .Poll}}<span class="hint">refreshing</span>{{end}}
+  </div>
+  <p class="hint">{{.LogPath}}</p>
+  {{if .Job.Error}}<div class="notice error">{{.Job.Error}}</div>{{end}}
+  <pre class="log-view">{{range .Lines}}{{.}}
+{{else}}No log output yet.
+{{end}}</pre>
+</div>
+{{end}}

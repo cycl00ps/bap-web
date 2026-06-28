@@ -1,0 +1,241 @@
+{{template "base_start" .}}
+<section class="page-head">
+  <div>
+    <h1>MicroVMs</h1>
+    <p class="hint">Manage Firecracker instances, SSH access, host networking, and reusable policies.</p>
+  </div>
+</section>
+
+{{if .DashboardError}}
+<div class="notice error">{{.DashboardError}}</div>
+{{end}}
+
+<section class="status-grid">
+  {{range $name, $status := .HostStatus.Checks}}
+  <div class="status-item">
+    <span>{{$name}}</span>
+    <strong class="{{if eq $status "ok"}}ok{{else}}bad{{end}}">{{$status}}</strong>
+  </div>
+  {{end}}
+</section>
+
+{{if or .HostStatus.Orphans.TAPs .HostStatus.Orphans.Bridges}}
+<section class="notice warning">
+  <strong>Orphaned host network devices detected.</strong>
+  {{if .HostStatus.Orphans.TAPs}}<p>Stale TAPs: {{range .HostStatus.Orphans.TAPs}}<code>{{.}}</code> {{end}}</p>{{end}}
+  {{if .HostStatus.Orphans.Bridges}}<p>Stale bridges: {{range .HostStatus.Orphans.Bridges}}<code>{{.}}</code> {{end}}</p>{{end}}
+  <form method="post" action="/ui/host/orphans/cleanup">
+    <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+    <button class="secondary" type="submit">Clean Up Orphans</button>
+  </form>
+</section>
+{{end}}
+
+{{if .HostStatus.NetworkConflicts}}
+<section class="notice warning">
+  <strong>Conflicting network ranges detected.</strong>
+  {{range .HostStatus.NetworkConflicts}}<p>{{.Message}}</p>{{end}}
+</section>
+{{end}}
+
+<section class="dashboard-grid">
+  <div>
+    <div id="vms-table" hx-get="/ui/vms-table" hx-trigger="load, every 5s, vmsChanged from:body">
+      {{template "vms_table.html" .}}
+    </div>
+  </div>
+
+  <aside id="new-vm-panel" class="panel">
+    {{template "new_vm_form.html" .}}
+  </aside>
+</section>
+
+<section id="networks" class="dashboard-grid">
+  <div>
+    <h2>Shared Networks</h2>
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Name</th><th>CIDR</th><th>Gateway</th><th class="table-actions">Actions</th></tr>
+      </thead>
+      <tbody>
+        {{range .Networks}}
+        <tr>
+          <td>{{.Name}}</td>
+          <td>{{.CIDR}}</td>
+          <td>{{.GatewayIP}}</td>
+          <td class="actions">
+            <form method="post" action="/ui/networks/{{.ID}}/delete">
+              <input type="hidden" name="csrf" value="{{$.User.CSRF}}">
+              <button class="secondary danger" type="submit">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="4">No shared networks.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+    </div>
+  </div>
+  <aside class="panel">
+    <h2>Create Network</h2>
+    <form method="post" action="/ui/networks" class="stack">
+      <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+      <label>Name <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9-]{0,31}"></label>
+      <label>CIDR <input name="cidr" required placeholder="172.31.50.0/29"></label>
+      <label>Gateway IP <input name="gateway_ip" placeholder="first usable by default"></label>
+      <button type="submit">Create Network</button>
+    </form>
+  </aside>
+</section>
+
+<section id="egress-policies" class="dashboard-grid">
+  <div>
+    <h2>Egress Policies</h2>
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Name</th><th>Mode</th><th>TCP</th><th>UDP</th><th>CIDRs</th><th class="table-actions">Actions</th></tr>
+      </thead>
+      <tbody>
+        {{range .EgressPolicies}}
+        <tr>
+          <td>{{.Name}}</td>
+          <td>{{.Mode}}</td>
+          <td>{{.TCPPorts}}</td>
+          <td>{{.UDPPorts}}</td>
+          <td>{{.CIDRs}}</td>
+          <td class="actions">
+            <form method="post" action="/ui/egress-policies/{{.ID}}/delete">
+              <input type="hidden" name="csrf" value="{{$.User.CSRF}}">
+              <button class="secondary danger" type="submit">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="6">No reusable egress policies.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+    </div>
+  </div>
+  <aside class="panel">
+    <h2>Create Egress Policy</h2>
+    <form method="post" action="/ui/egress-policies" class="stack">
+      <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+      <label>Name <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9-]{0,31}"></label>
+      <label>Mode
+        <select name="mode">
+          <option value="restricted">Restricted</option>
+          <option value="allow_all">Allow all</option>
+          <option value="deny_all">Deny all</option>
+        </select>
+      </label>
+      <label>TCP ports <input name="tcp_ports" placeholder="80,443"></label>
+      <label>UDP ports <input name="udp_ports" placeholder="53"></label>
+      <label>Allowed CIDRs <input name="cidrs" placeholder="203.0.113.10/32"></label>
+      <button type="submit">Create Policy</button>
+    </form>
+  </aside>
+</section>
+<script>
+(() => {
+  document.body.addEventListener("submit", event => {
+    const form = event.target;
+    if (!(form instanceof HTMLFormElement) || !form.matches("[data-confirm-delete]")) return;
+    const select = form.querySelector('select[name="action"]');
+    if (select && select.value === "delete" && !window.confirm(form.dataset.confirmDelete || "Delete this item?")) {
+      event.preventDefault();
+    }
+  });
+})();
+</script>
+{{template "base_end" .}}
+
+{{define "new_vm_form.html"}}
+<h2>New VM</h2>
+{{if .CreateVMError}}
+<div class="notice error">{{.CreateVMError}}</div>
+{{end}}
+{{if .CreateVMSuccess}}
+<div class="notice success">{{.CreateVMSuccess}}</div>
+{{end}}
+<form method="post" action="/ui/vms" hx-post="/ui/vms" hx-target="#new-vm-panel" hx-swap="innerHTML" class="stack">
+  <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+  <label>Name <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9-]{0,31}" value="{{.CreateVMForm.Name}}"></label>
+  {{with .CreateVMFields}}{{with index . "name"}}<p class="field-error">{{.}}</p>{{end}}{{end}}
+  <div class="two-col">
+    <label>vCPU <input name="vcpu_count" type="number" min="1" max="32" value="{{.CreateVMForm.VCPUCount}}"></label>
+    <label>Memory MiB <input name="mem_mib" type="number" min="128" value="{{.CreateVMForm.MemMiB}}"></label>
+  </div>
+  {{with .CreateVMFields}}{{with index . "vcpu_count"}}<p class="field-error">{{.}}</p>{{end}}{{with index . "mem_mib"}}<p class="field-error">{{.}}</p>{{end}}{{end}}
+  <label>SSH Port <input name="ssh_port" type="number" min="20000" max="29999" placeholder="auto" value="{{if .CreateVMForm.SSHPort}}{{.CreateVMForm.SSHPort}}{{end}}"></label>
+  {{with .CreateVMFields}}{{with index . "ssh_port"}}<p class="field-error">{{.}}</p>{{end}}{{end}}
+  <label>Base image
+    <select name="base_image_id">
+      {{range .BaseImages}}
+      <option value="{{.ID}}" {{if eq $.CreateVMForm.BaseImageID .ID}}selected{{end}}>{{.Name}} ({{.Filesystem}}, {{.VirtualSizeMiB}} MiB, {{.Status}})</option>
+      {{end}}
+    </select>
+  </label>
+  {{with .CreateVMFields}}{{with index . "base_image_id"}}<p class="field-error">{{.}}</p>{{end}}{{end}}
+  <label>Kernel
+    <select name="kernel_id">
+      {{range .Kernels}}
+      {{if eq .Status "active"}}
+      <option value="{{.ID}}" {{if eq $.CreateVMForm.KernelID .ID}}selected{{end}}>{{.Name}} ({{.Version}}, {{.Architecture}})</option>
+      {{end}}
+      {{end}}
+    </select>
+  </label>
+  {{with .CreateVMFields}}{{with index . "kernel_id"}}<p class="field-error">{{.}}</p>{{end}}{{end}}
+  <label>Rootfs size MiB <input name="rootfs_size_mib" type="number" min="1" value="{{if .CreateVMForm.RootFSSizeMiB}}{{.CreateVMForm.RootFSSizeMiB}}{{end}}"></label>
+  {{with .CreateVMFields}}{{with index . "rootfs_size_mib"}}<p class="field-error">{{.}}</p>{{end}}{{end}}
+  <label>SSH key
+    <select name="ssh_key_id">
+      <option value="" {{if eq .CreateVMForm.SSHKeyID ""}}selected{{end}}>Use extra authorized keys only</option>
+      {{range .SSHKeys}}
+      <option value="{{.ID}}" {{if eq $.CreateVMForm.SSHKeyID .ID}}selected{{end}}>{{.Name}} ({{.Fingerprint}})</option>
+      {{end}}
+    </select>
+  </label>
+  {{with .CreateVMFields}}{{with index . "ssh_key_id"}}<p class="field-error">{{.}}</p>{{end}}{{end}}
+  <label>Network mode
+    <select name="network_mode">
+      <option value="routed_ptp" {{if eq .CreateVMForm.NetworkMode "routed_ptp"}}selected{{end}}>Isolated /30</option>
+      <option value="shared_bridge" {{if eq .CreateVMForm.NetworkMode "shared_bridge"}}selected{{end}}>Shared bridge</option>
+    </select>
+  </label>
+  <label>Shared network
+    <select name="network_id">
+      <option value="" {{if eq .CreateVMForm.NetworkID ""}}selected{{end}}>None</option>
+      {{range .Networks}}
+      <option value="{{.ID}}" {{if eq $.CreateVMForm.NetworkID .ID}}selected{{end}}>{{.Name}} {{.CIDR}}</option>
+      {{end}}
+    </select>
+  </label>
+  {{with .CreateVMFields}}{{with index . "network_id"}}<p class="field-error">{{.}}</p>{{end}}{{end}}
+  <label>Egress mode
+    <select name="egress_mode">
+      <option value="allow_all" {{if eq .CreateVMForm.EgressMode "allow_all"}}selected{{end}}>Allow all</option>
+      <option value="deny_all" {{if eq .CreateVMForm.EgressMode "deny_all"}}selected{{end}}>Deny all</option>
+    </select>
+  </label>
+  <label>Egress policy
+    <select name="egress_policy_id">
+      <option value="" {{if eq .CreateVMForm.EgressPolicyID ""}}selected{{end}}>No reusable policy</option>
+      {{range .EgressPolicies}}
+      <option value="{{.ID}}" {{if eq $.CreateVMForm.EgressPolicyID .ID}}selected{{end}}>{{.Name}} ({{.Mode}})</option>
+      {{end}}
+    </select>
+  </label>
+  <label>Dev user <input name="dev_user" value="{{.CreateVMForm.DevUser}}"></label>
+  <label>Repo URL <input name="repo_url" placeholder="optional" value="{{.CreateVMForm.RepoURL}}"></label>
+  <label>Git ref <input name="git_ref" value="{{.CreateVMForm.GitRef}}"></label>
+  <label>Extra authorized keys <textarea name="extra_authorized_keys" rows="4" placeholder="optional public keys">{{.CreateVMForm.ExtraAuthorizedKeys}}</textarea></label>
+  {{with .CreateVMFields}}{{with index . "extra_authorized_keys"}}<p class="field-error">{{.}}</p>{{end}}{{end}}
+  <p class="hint">Generated SSH private keys are shown once from the SSH Keys page and are not stored.</p>
+  <button type="submit">Create VM</button>
+</form>
+{{end}}

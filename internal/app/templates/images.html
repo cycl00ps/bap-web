@@ -1,0 +1,277 @@
+{{template "base_start" .}}
+<section class="page-head">
+  <div>
+    <h1>Images</h1>
+    <p class="hint">Manage base rootfs images, build jobs, and build hooks.</p>
+  </div>
+</section>
+
+{{if .Error}}
+<div class="notice error">{{.Error}}</div>
+{{end}}
+
+<section class="split">
+  <div>
+    <h2>Base Images</h2>
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Name</th><th>Status</th><th>Filesystem</th><th>Virtual</th><th>Disk</th><th>Checksum</th><th class="table-actions">Actions</th></tr>
+      </thead>
+      <tbody>
+      {{range .BaseImages}}
+        <tr>
+          <td>{{.Name}}<br><span class="hint">{{.Path}}</span></td>
+          <td>{{.Status}}</td>
+          <td>{{.Filesystem}}</td>
+          <td>{{.VirtualSizeMiB}} MiB</td>
+          <td>{{.DiskSizeBytes}} bytes</td>
+          <td><code>{{.Checksum}}</code></td>
+          <td class="actions">
+            <form method="post" action="/ui/base-images/{{.ID}}/action" class="action-select-form" data-confirm-delete="Delete this base image?">
+              <input type="hidden" name="csrf" value="{{$.User.CSRF}}">
+              <select name="action" aria-label="Base image action">
+                <option value="make_active">Make active</option>
+                <option value="mark_deprecated">Mark deprecated</option>
+                <option value="archive">Archive</option>
+                <option value="delete">Delete</option>
+              </select>
+              <button class="secondary" type="submit">Confirm</button>
+            </form>
+          </td>
+        </tr>
+      {{else}}
+        <tr><td colspan="7">No base images registered.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    </div>
+  </div>
+  <aside class="panel">
+    <h2>Register Existing Image</h2>
+    <form method="post" action="/ui/base-images/register" class="stack">
+      <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+      <label>Name <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9-]{0,31}"></label>
+      <label>Path <input name="path" required placeholder="/var/lib/microvms/base/example.ext4"></label>
+      <label>Filesystem
+        <select name="filesystem">
+          <option value="">Detect</option>
+          <option value="ext4">ext4</option>
+          <option value="xfs">xfs</option>
+          <option value="unknown">unknown</option>
+        </select>
+      </label>
+      <label>Status
+        <select name="status">
+          <option value="active">active</option>
+          <option value="deprecated">deprecated</option>
+          <option value="archived">archived</option>
+        </select>
+      </label>
+      <label>Provenance <input name="provenance" placeholder="source or notes"></label>
+      <button type="submit">Register</button>
+    </form>
+  </aside>
+</section>
+
+<script>
+(() => {
+  document.querySelectorAll("[data-confirm-delete]").forEach(form => {
+    form.addEventListener("submit", event => {
+      const select = form.querySelector('select[name="action"]');
+      if (select && select.value === "delete" && !window.confirm(form.dataset.confirmDelete || "Delete this item?")) {
+        event.preventDefault();
+      }
+    });
+  });
+})();
+</script>
+
+<section class="split" id="image-builds" data-open-build-job="{{.OpenBuildJobID}}">
+  <div>
+    <h2>Build Jobs</h2>
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Name</th><th>Status</th><th>Filesystem</th><th>Size</th><th>Result</th><th>Error</th><th>Created</th><th class="table-actions">Actions</th></tr>
+      </thead>
+      <tbody>
+      {{range .ImageBuildJobs}}
+        <tr id="build-job-{{.ID}}">
+          <td>{{.Name}}<br><span class="hint">{{.ID}}</span></td>
+          <td>{{.Status}}</td>
+          <td>{{.Filesystem}}</td>
+          <td>{{.SizeMiB}} MiB</td>
+          <td>{{.ResultImageID}}</td>
+          <td class="error-cell">{{.Error}}</td>
+          <td>{{.CreatedAt}}</td>
+          <td><button class="secondary" type="button" data-build-log-toggle="{{.ID}}" data-build-log-url="/ui/image-build-jobs/{{.ID}}/logs?lines=300">View logs</button></td>
+        </tr>
+        <tr class="build-log-row" id="build-log-row-{{.ID}}" hidden>
+          <td colspan="8">
+            <div class="build-log-panel" id="build-log-panel-{{.ID}}"></div>
+          </td>
+        </tr>
+      {{else}}
+        <tr><td colspan="8">No build jobs yet.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    </div>
+  </div>
+  <aside class="panel">
+    <h2>Build Image</h2>
+    <form method="post" action="/ui/base-images/build" class="stack">
+      <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+      <label>Name <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9-]{0,31}"></label>
+      <label>Filesystem
+        <select name="filesystem">
+          <option value="ext4">ext4</option>
+          <option value="xfs">xfs</option>
+        </select>
+      </label>
+      <label>Size MiB <input name="size_mib" type="number" min="512" value="2048" required></label>
+      <label>Extra packages <textarea name="packages" rows="4" placeholder="comma, space, or newline separated"></textarea></label>
+      <label>Hooks
+        <select name="hook_ids" multiple size="5">
+          {{range .ImageHooks}}
+          <option value="{{.ID}}">{{.Name}} ({{.SourceType}})</option>
+          {{end}}
+        </select>
+      </label>
+      <p class="hint">Hooks run as root inside the image chroot and are audited.</p>
+      <button type="submit">Start Build</button>
+    </form>
+  </aside>
+</section>
+
+<script>
+(() => {
+  const timers = new Map();
+  const stopPolling = id => {
+    const timer = timers.get(id);
+    if (timer) window.clearTimeout(timer);
+    timers.delete(id);
+  };
+  const loadLogs = async (button, id) => {
+    const panel = document.getElementById(`build-log-panel-${id}`);
+    if (!panel) return;
+    try {
+      const res = await fetch(button.dataset.buildLogUrl, {credentials: "same-origin"});
+      if (!res.ok) {
+        panel.innerHTML = `<div class="notice error">Unable to load build log (${res.status})</div>`;
+        stopPolling(id);
+        return;
+      }
+      panel.innerHTML = await res.text();
+      const fragment = panel.querySelector("[data-build-log-fragment]");
+      if (fragment && fragment.dataset.poll === "true") {
+        stopPolling(id);
+        timers.set(id, window.setTimeout(() => loadLogs(button, id), 2000));
+      } else {
+        stopPolling(id);
+      }
+    } catch (err) {
+      panel.innerHTML = `<div class="notice error">Unable to load build log.</div>`;
+      stopPolling(id);
+    }
+  };
+  const openLogs = button => {
+    const id = button.dataset.buildLogToggle;
+    const row = document.getElementById(`build-log-row-${id}`);
+    if (!id || !row) return;
+    row.hidden = false;
+    button.textContent = "Hide logs";
+    loadLogs(button, id);
+  };
+  const closeLogs = button => {
+    const id = button.dataset.buildLogToggle;
+    const row = document.getElementById(`build-log-row-${id}`);
+    if (!id || !row) return;
+    row.hidden = true;
+    button.textContent = "View logs";
+    stopPolling(id);
+  };
+  document.querySelectorAll("[data-build-log-toggle]").forEach(button => {
+    button.addEventListener("click", () => {
+      const row = document.getElementById(`build-log-row-${button.dataset.buildLogToggle}`);
+      if (row && row.hidden) openLogs(button);
+      else closeLogs(button);
+    });
+  });
+  const container = document.getElementById("image-builds");
+  const openID = container ? container.dataset.openBuildJob : "";
+  if (openID) {
+    const button = Array.from(document.querySelectorAll("[data-build-log-toggle]")).find(el => el.dataset.buildLogToggle === openID);
+    if (button) openLogs(button);
+  }
+})();
+</script>
+
+<section class="split">
+  <div>
+    <h2>Hooks</h2>
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Name</th><th>Source</th><th>Status</th><th>Checksum</th><th>Details</th><th class="table-actions">Actions</th></tr>
+      </thead>
+      <tbody>
+      {{range .ImageHooks}}
+        <tr>
+          <td>{{.Name}}</td>
+          <td>{{.SourceType}}</td>
+          <td>{{.Status}}</td>
+          <td><code>{{.Checksum}}</code></td>
+          <td>{{if eq .SourceType "git"}}{{.GitURL}} {{.GitRef}} {{.GitPath}}{{else}}{{.ContentPath}}{{end}}</td>
+          <td>
+            <form method="post" action="/ui/image-hooks/{{.ID}}/delete">
+              <input type="hidden" name="csrf" value="{{$.User.CSRF}}">
+              <button class="secondary danger" type="submit">Delete</button>
+            </form>
+          </td>
+        </tr>
+      {{else}}
+        <tr><td colspan="6">No hooks yet.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    </div>
+  </div>
+  <aside class="panel">
+    <h2>Create Hook</h2>
+    <form method="post" action="/ui/image-hooks" class="stack">
+      <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+      <label>Name <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9-]{0,31}"></label>
+      <label>Source
+        <select name="source_type">
+          <option value="upload">uploaded script</option>
+          <option value="git">git source</option>
+        </select>
+      </label>
+      <label>Uploaded script <textarea name="content" rows="8" placeholder="#!/usr/bin/env bash"></textarea></label>
+      <label>Git URL <input name="git_url" placeholder="https://example.com/repo.git"></label>
+      <label>Git ref <input name="git_ref" placeholder="main"></label>
+      <label>Git path <input name="git_path" placeholder="hooks/build.sh"></label>
+      <button type="submit">Create Hook</button>
+    </form>
+  </aside>
+</section>
+{{template "base_end" .}}
+
+{{define "image_build_log.html"}}
+<div class="build-log-fragment" data-build-log-fragment data-poll="{{if .Poll}}true{{else}}false{{end}}">
+  <div class="build-log-head">
+    <div>
+      <strong>{{.Job.Name}}</strong>
+      <span class="hint">{{.Job.ID}} · {{.Job.Status}}{{if .Job.ResultImageID}} · image {{.Job.ResultImageID}}{{end}}</span>
+    </div>
+    {{if .Poll}}<span class="hint">refreshing</span>{{end}}
+  </div>
+  <p class="hint">{{.LogPath}}</p>
+  {{if .Job.Error}}<div class="notice error">{{.Job.Error}}</div>{{end}}
+  <pre class="log-view">{{range .Lines}}{{.}}
+{{else}}No log output yet.
+{{end}}</pre>
+</div>
+{{end}}

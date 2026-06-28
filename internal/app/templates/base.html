@@ -1,0 +1,37 @@
+{{define "base_start"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
+  <script src="/static/vendor/htmx/htmx.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <nav>
+      <a class="brand" href="/">BAP Web</a>
+      {{if .User}}
+      <a href="/ssh-keys">SSH Keys</a>
+      {{if .User.IsAdmin}}<a href="/images">Images</a>{{end}}
+      {{if .User.IsAdmin}}<a href="/kernels">Kernels</a>{{end}}
+      {{end}}
+    </nav>
+    {{if .User}}
+    <form method="post" action="/logout">
+      <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+      <span>{{.User.Username}}</span>
+      <button type="submit">Logout</button>
+    </form>
+    {{end}}
+  </header>
+  <main class="layout">
+{{end}}
+
+{{define "base_end"}}
+  </main>
+</body>
+</html>
+{{end}}
