@@ -8,6 +8,7 @@ The implementation is API-first:
 - `/ws/...` handles logs, events, and terminal streams.
 - `/ui/...` returns HTMX fragments.
 - HTML pages are a human client of the same service layer.
+- `/openapi.json`, `/docs/api`, `/docs/agents.md`, and `/llms.txt` expose API and agent-facing documentation.
 
 ## Development
 
@@ -85,6 +86,7 @@ See [UI_LAYOUT.md](./UI_LAYOUT.md) for the shared responsive layout rules used b
 - VM create/start/stop/delete.
 - VM restart, stopped resource edits, and restart-with-new CPU/memory values.
 - VM detail management sections for overview, shell, networking, resources, and logs.
+- Public OpenAPI, Swagger UI, and LLM/agent instruction pages.
 - Host status checks in the management UI.
 - Firecracker + jailer launch.
 - Registry-backed `/30` routed point-to-point allocation.

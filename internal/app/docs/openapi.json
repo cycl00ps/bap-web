@@ -1,0 +1,778 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "BAP Web API",
+    "version": "0.1.0",
+    "description": "API-first control plane for BAP Firecracker microVMs. Operational API requests require authentication except for the health check."
+  },
+  "servers": [
+    {"url": "/"}
+  ],
+  "security": [
+    {"BearerAuth": []}
+  ],
+  "tags": [
+    {"name": "Health"},
+    {"name": "Session"},
+    {"name": "Tokens"},
+    {"name": "Host"},
+    {"name": "SSH Keys"},
+    {"name": "Base Images"},
+    {"name": "Image Hooks"},
+    {"name": "Kernels"},
+    {"name": "MicroVMs"},
+    {"name": "Networking"}
+  ],
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": ["Health"],
+        "operationId": "getHealth",
+        "summary": "Check service health",
+        "security": [],
+        "responses": {
+          "200": {"description": "Health status", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Health"}}}}
+        }
+      }
+    },
+    "/api/session": {
+      "get": {
+        "tags": ["Session"],
+        "operationId": "getSession",
+        "summary": "Inspect the authenticated user or token",
+        "responses": {
+          "200": {"description": "Current session", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Session"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/api/tokens": {
+      "get": {
+        "tags": ["Tokens"],
+        "operationId": "listTokens",
+        "summary": "List API tokens",
+        "responses": {
+          "200": {"description": "API tokens", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/APIToken"}}}}},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      },
+      "post": {
+        "tags": ["Tokens"],
+        "operationId": "createToken",
+        "summary": "Create an API token",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/APITokenCreateRequest"}}}},
+        "responses": {
+          "201": {"description": "Created token and one-time secret", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/APITokenCreateResponse"}}}},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/api/tokens/{id}": {
+      "delete": {
+        "tags": ["Tokens"],
+        "operationId": "deleteToken",
+        "summary": "Revoke an API token",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "responses": {
+          "200": {"description": "Revoked token", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RevokedResponse"}}}},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/api/host/status": {
+      "get": {
+        "tags": ["Host"],
+        "operationId": "getHostStatus",
+        "summary": "Inspect host integration status",
+        "responses": {"200": {"description": "Host status", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HostStatus"}}}}}
+      }
+    },
+    "/api/host/orphans": {
+      "get": {
+        "tags": ["Host"],
+        "operationId": "getHostOrphans",
+        "summary": "List orphaned host networking resources",
+        "responses": {"200": {"description": "Host orphans", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HostOrphans"}}}}}
+      }
+    },
+    "/api/host/orphans/cleanup": {
+      "post": {
+        "tags": ["Host"],
+        "operationId": "cleanupHostOrphans",
+        "summary": "Clean orphaned host networking resources",
+        "responses": {"200": {"description": "Cleanup result", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HostOrphans"}}}}}
+      }
+    },
+    "/api/ssh-keys": {
+      "get": {
+        "tags": ["SSH Keys"],
+        "operationId": "listSSHKeys",
+        "summary": "List reusable SSH public keys",
+        "responses": {"200": {"description": "SSH keys", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/SSHKey"}}}}}}
+      }
+    },
+    "/api/ssh-keys/generate": {
+      "post": {
+        "tags": ["SSH Keys"],
+        "operationId": "generateSSHKey",
+        "summary": "Generate a reusable SSH key; private key is returned once",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SSHKeyRequest"}}}},
+        "responses": {"201": {"description": "Generated SSH key", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SSHKeyGenerateResponse"}}}}}
+      }
+    },
+    "/api/ssh-keys/import": {
+      "post": {
+        "tags": ["SSH Keys"],
+        "operationId": "importSSHKey",
+        "summary": "Import a reusable SSH public key",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SSHKeyRequest"}}}},
+        "responses": {"201": {"description": "Imported SSH key", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SSHKey"}}}}}
+      }
+    },
+    "/api/ssh-keys/{id}": {
+      "get": {
+        "tags": ["SSH Keys"],
+        "operationId": "getSSHKey",
+        "summary": "Get an SSH key",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "responses": {"200": {"description": "SSH key", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SSHKey"}}}}, "404": {"$ref": "#/components/responses/NotFound"}}
+      },
+      "delete": {
+        "tags": ["SSH Keys"],
+        "operationId": "deleteSSHKey",
+        "summary": "Delete an SSH key",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "responses": {"200": {"description": "Deleted SSH key", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DeletedResponse"}}}}, "404": {"$ref": "#/components/responses/NotFound"}}
+      }
+    },
+    "/api/base-images": {
+      "get": {
+        "tags": ["Base Images"],
+        "operationId": "listBaseImages",
+        "summary": "List base rootfs images",
+        "responses": {"200": {"description": "Base images", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/BaseImage"}}}}}}
+      }
+    },
+    "/api/base-images/register": {
+      "post": {
+        "tags": ["Base Images"],
+        "operationId": "registerBaseImage",
+        "summary": "Register an existing base image",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RegisterBaseImageRequest"}}}},
+        "responses": {"201": {"description": "Registered base image", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/BaseImage"}}}}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      }
+    },
+    "/api/base-images/build": {
+      "post": {
+        "tags": ["Base Images"],
+        "operationId": "buildBaseImage",
+        "summary": "Start a base image build job",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/BuildBaseImageRequest"}}}},
+        "responses": {"202": {"description": "Image build job", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ImageBuildJob"}}}}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      }
+    },
+    "/api/base-images/{id}": {
+      "patch": {
+        "tags": ["Base Images"],
+        "operationId": "updateBaseImage",
+        "summary": "Update base image status",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/BaseImageStatusRequest"}}}},
+        "responses": {"200": {"description": "Updated base image", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/BaseImage"}}}}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      },
+      "delete": {
+        "tags": ["Base Images"],
+        "operationId": "deleteBaseImage",
+        "summary": "Delete a base image",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "responses": {"200": {"description": "Deleted base image", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DeletedResponse"}}}}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      }
+    },
+    "/api/image-build-jobs/{id}": {
+      "get": {
+        "tags": ["Base Images"],
+        "operationId": "getImageBuildJob",
+        "summary": "Get an image build job",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "responses": {"200": {"description": "Image build job", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ImageBuildJob"}}}}, "404": {"$ref": "#/components/responses/NotFound"}}
+      }
+    },
+    "/api/image-build-jobs/{id}/logs": {
+      "get": {
+        "tags": ["Base Images"],
+        "operationId": "getImageBuildJobLogs",
+        "summary": "Get image build job logs",
+        "parameters": [{"$ref": "#/components/parameters/ID"}, {"$ref": "#/components/parameters/Lines"}],
+        "responses": {"200": {"description": "Log lines", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LogLines"}}}}}
+      }
+    },
+    "/api/image-hooks": {
+      "get": {
+        "tags": ["Image Hooks"],
+        "operationId": "listImageHooks",
+        "summary": "List image build hooks",
+        "responses": {"200": {"description": "Image hooks", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/ImageHook"}}}}}}
+      },
+      "post": {
+        "tags": ["Image Hooks"],
+        "operationId": "createImageHook",
+        "summary": "Create an image build hook",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ImageHookRequest"}}}},
+        "responses": {"201": {"description": "Image hook", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ImageHook"}}}}}
+      }
+    },
+    "/api/image-hooks/{id}": {
+      "delete": {
+        "tags": ["Image Hooks"],
+        "operationId": "deleteImageHook",
+        "summary": "Delete an image build hook",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "responses": {"200": {"description": "Deleted image hook", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DeletedResponse"}}}}}
+      }
+    },
+    "/api/kernels": {
+      "get": {
+        "tags": ["Kernels"],
+        "operationId": "listKernels",
+        "summary": "List guest kernels",
+        "responses": {"200": {"description": "Kernels", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/Kernel"}}}}}}
+      }
+    },
+    "/api/kernels/firecracker-ci/scan": {
+      "post": {
+        "tags": ["Kernels"],
+        "operationId": "scanFirecrackerCIKernels",
+        "summary": "Start Firecracker CI kernel discovery",
+        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/KernelDiscoveryRequest"}}}},
+        "responses": {"202": {"description": "Kernel discovery job", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/KernelDiscoveryJob"}}}}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      }
+    },
+    "/api/kernels/firecracker-ci/scan-jobs": {
+      "get": {
+        "tags": ["Kernels"],
+        "operationId": "listKernelDiscoveryJobs",
+        "summary": "List kernel discovery jobs",
+        "responses": {"200": {"description": "Kernel discovery jobs", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/KernelDiscoveryJob"}}}}}}
+      }
+    },
+    "/api/kernels/firecracker-ci/scan-jobs/{id}": {
+      "get": {
+        "tags": ["Kernels"],
+        "operationId": "getKernelDiscoveryJob",
+        "summary": "Get a kernel discovery job",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "responses": {"200": {"description": "Kernel discovery job", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/KernelDiscoveryJob"}}}}, "404": {"$ref": "#/components/responses/NotFound"}}
+      }
+    },
+    "/api/kernels/firecracker-ci/items": {
+      "get": {
+        "tags": ["Kernels"],
+        "operationId": "listKernelDiscoveryItems",
+        "summary": "List discovered Firecracker CI kernel items",
+        "parameters": [{"name": "job_id", "in": "query", "required": false, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "Kernel discovery items", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/KernelDiscoveryItem"}}}}}}
+      }
+    },
+    "/api/kernels/import-firecracker-ci": {
+      "post": {
+        "tags": ["Kernels"],
+        "operationId": "importFirecrackerCIKernel",
+        "summary": "Import a discovered or typed Firecracker CI kernel",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/KernelImportRequest"}}}},
+        "responses": {"201": {"description": "Imported kernel", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Kernel"}}}}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      }
+    },
+    "/api/kernels/upload": {
+      "post": {
+        "tags": ["Kernels"],
+        "operationId": "uploadKernel",
+        "summary": "Upload a guest kernel",
+        "requestBody": {"required": true, "content": {"multipart/form-data": {"schema": {"$ref": "#/components/schemas/KernelUploadRequest"}}}},
+        "responses": {"201": {"description": "Uploaded kernel", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Kernel"}}}}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      }
+    },
+    "/api/kernels/{id}": {
+      "patch": {
+        "tags": ["Kernels"],
+        "operationId": "updateKernel",
+        "summary": "Update kernel metadata or status",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/KernelUpdateRequest"}}}},
+        "responses": {"200": {"description": "Updated kernel", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Kernel"}}}}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      },
+      "delete": {
+        "tags": ["Kernels"],
+        "operationId": "deleteKernel",
+        "summary": "Delete a kernel",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "responses": {"200": {"description": "Deleted kernel", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DeletedResponse"}}}}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      }
+    },
+    "/api/kernels/{id}/test": {
+      "post": {
+        "tags": ["Kernels"],
+        "operationId": "testKernel",
+        "summary": "Start a kernel test job",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "responses": {"202": {"description": "Kernel test job", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/KernelTestJob"}}}}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      }
+    },
+    "/api/kernel-test-jobs/{id}": {
+      "get": {
+        "tags": ["Kernels"],
+        "operationId": "getKernelTestJob",
+        "summary": "Get a kernel test job",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "responses": {"200": {"description": "Kernel test job", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/KernelTestJob"}}}}, "404": {"$ref": "#/components/responses/NotFound"}}
+      }
+    },
+    "/api/kernel-test-jobs/{id}/logs": {
+      "get": {
+        "tags": ["Kernels"],
+        "operationId": "getKernelTestJobLogs",
+        "summary": "Get kernel test job logs",
+        "parameters": [{"$ref": "#/components/parameters/ID"}, {"$ref": "#/components/parameters/Lines"}],
+        "responses": {"200": {"description": "Log lines", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LogLines"}}}}}
+      }
+    },
+    "/api/vms": {
+      "get": {
+        "tags": ["MicroVMs"],
+        "operationId": "listVMs",
+        "summary": "List MicroVMs",
+        "responses": {"200": {"description": "MicroVMs", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/VM"}}}}}}
+      },
+      "post": {
+        "tags": ["MicroVMs"],
+        "operationId": "createVM",
+        "summary": "Create a MicroVM",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateVMRequest"}}}},
+        "responses": {"201": {"description": "Created MicroVM", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VM"}}}}, "400": {"$ref": "#/components/responses/BadRequest"}, "422": {"$ref": "#/components/responses/Unprocessable"}}
+      }
+    },
+    "/api/vms/{id}": {
+      "get": {
+        "tags": ["MicroVMs"],
+        "operationId": "getVM",
+        "summary": "Get a MicroVM",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "responses": {"200": {"description": "MicroVM", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VM"}}}}, "404": {"$ref": "#/components/responses/NotFound"}}
+      },
+      "delete": {
+        "tags": ["MicroVMs"],
+        "operationId": "deleteVM",
+        "summary": "Delete a MicroVM",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "responses": {"200": {"description": "Deleted MicroVM", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DeletedResponse"}}}}, "404": {"$ref": "#/components/responses/NotFound"}}
+      }
+    },
+    "/api/vms/{id}/start": {
+      "post": {
+        "tags": ["MicroVMs"],
+        "operationId": "startVM",
+        "summary": "Start a MicroVM",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "responses": {"200": {"description": "Started MicroVM", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VM"}}}}}
+      }
+    },
+    "/api/vms/{id}/stop": {
+      "post": {
+        "tags": ["MicroVMs"],
+        "operationId": "stopVM",
+        "summary": "Stop a MicroVM",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "responses": {"200": {"description": "Stopped MicroVM", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VM"}}}}}
+      }
+    },
+    "/api/vms/{id}/restart": {
+      "post": {
+        "tags": ["MicroVMs"],
+        "operationId": "restartVM",
+        "summary": "Restart a MicroVM, optionally with new CPU or memory",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/ResourceRequest"}}}},
+        "responses": {"200": {"description": "Restarted MicroVM", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VM"}}}}}
+      }
+    },
+    "/api/vms/{id}/resources": {
+      "put": {
+        "tags": ["MicroVMs"],
+        "operationId": "updateVMResources",
+        "summary": "Update stopped VM resources or restart with new resources",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ResourceRequest"}}}},
+        "responses": {"200": {"description": "Updated MicroVM", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VM"}}}}}
+      }
+    },
+    "/api/vms/{id}/logs": {
+      "get": {
+        "tags": ["MicroVMs"],
+        "operationId": "getVMLogs",
+        "summary": "Get MicroVM logs",
+        "parameters": [{"$ref": "#/components/parameters/ID"}, {"$ref": "#/components/parameters/Lines"}],
+        "responses": {"200": {"description": "Log lines", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LogLines"}}}}}
+      }
+    },
+    "/api/vms/{id}/exec": {
+      "post": {
+        "tags": ["MicroVMs"],
+        "operationId": "executeVMCommand",
+        "summary": "Execute a command in a running MicroVM",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VMExecRequest"}}}},
+        "responses": {"200": {"description": "Command result", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VMExecResult"}}}}, "422": {"$ref": "#/components/responses/Unprocessable"}}
+      }
+    },
+    "/api/vms/{id}/exec-jobs": {
+      "get": {
+        "tags": ["MicroVMs"],
+        "operationId": "listVMExecJobs",
+        "summary": "List VM exec jobs",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "responses": {"200": {"description": "Exec jobs", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/VMExecJob"}}}}}}
+      },
+      "post": {
+        "tags": ["MicroVMs"],
+        "operationId": "createVMExecJob",
+        "summary": "Start a long-running VM exec job",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VMExecRequest"}}}},
+        "responses": {"202": {"description": "Exec job", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VMExecJob"}}}}}
+      }
+    },
+    "/api/vms/{id}/exec-jobs/{job_id}": {
+      "get": {
+        "tags": ["MicroVMs"],
+        "operationId": "getVMExecJob",
+        "summary": "Get a VM exec job",
+        "parameters": [{"$ref": "#/components/parameters/ID"}, {"$ref": "#/components/parameters/JobID"}],
+        "responses": {"200": {"description": "Exec job", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VMExecJob"}}}}, "404": {"$ref": "#/components/responses/NotFound"}}
+      }
+    },
+    "/api/vms/{id}/exec-jobs/{job_id}/logs": {
+      "get": {
+        "tags": ["MicroVMs"],
+        "operationId": "getVMExecJobLogs",
+        "summary": "Get VM exec job logs",
+        "parameters": [{"$ref": "#/components/parameters/ID"}, {"$ref": "#/components/parameters/JobID"}, {"$ref": "#/components/parameters/Lines"}],
+        "responses": {"200": {"description": "Log lines", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LogLines"}}}}}
+      }
+    },
+    "/api/vms/{id}/exec-jobs/{job_id}/cancel": {
+      "post": {
+        "tags": ["MicroVMs"],
+        "operationId": "cancelVMExecJob",
+        "summary": "Cancel a VM exec job",
+        "parameters": [{"$ref": "#/components/parameters/ID"}, {"$ref": "#/components/parameters/JobID"}],
+        "responses": {"200": {"description": "Exec job", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VMExecJob"}}}}}
+      }
+    },
+    "/api/vms/{id}/network": {
+      "get": {
+        "tags": ["MicroVMs", "Networking"],
+        "operationId": "getVMNetwork",
+        "summary": "Get VM networking state",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "responses": {"200": {"description": "VM network state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VMNetworkState"}}}}}
+      }
+    },
+    "/api/vms/{id}/ingress-rules": {
+      "post": {
+        "tags": ["Networking"],
+        "operationId": "createVMIngressRule",
+        "summary": "Create an ingress port mapping for a VM",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/IngressRuleRequest"}}}},
+        "responses": {"201": {"description": "Ingress rule", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/IngressRule"}}}}}
+      }
+    },
+    "/api/vms/{id}/ingress-rules/{rule_id}": {
+      "delete": {
+        "tags": ["Networking"],
+        "operationId": "deleteVMIngressRule",
+        "summary": "Delete an ingress port mapping",
+        "parameters": [{"$ref": "#/components/parameters/ID"}, {"$ref": "#/components/parameters/RuleID"}],
+        "responses": {"200": {"description": "Deleted ingress rule", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DeletedResponse"}}}}}
+      }
+    },
+    "/api/vms/{id}/egress-policy": {
+      "put": {
+        "tags": ["Networking"],
+        "operationId": "setVMEgressPolicy",
+        "summary": "Set VM egress mode or policy",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VMEgressPolicyRequest"}}}},
+        "responses": {"200": {"description": "Updated MicroVM", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VM"}}}}}
+      }
+    },
+    "/api/networks": {
+      "get": {
+        "tags": ["Networking"],
+        "operationId": "listNetworks",
+        "summary": "List shared bridge networks",
+        "responses": {"200": {"description": "Networks", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/Network"}}}}}}
+      },
+      "post": {
+        "tags": ["Networking"],
+        "operationId": "createNetwork",
+        "summary": "Create a shared bridge network",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NetworkRequest"}}}},
+        "responses": {"201": {"description": "Network", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Network"}}}}}
+      }
+    },
+    "/api/networks/{id}": {
+      "delete": {
+        "tags": ["Networking"],
+        "operationId": "deleteNetwork",
+        "summary": "Delete a shared bridge network",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "responses": {"200": {"description": "Deleted network", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DeletedResponse"}}}}}
+      }
+    },
+    "/api/egress-policies": {
+      "get": {
+        "tags": ["Networking"],
+        "operationId": "listEgressPolicies",
+        "summary": "List reusable egress policies",
+        "responses": {"200": {"description": "Egress policies", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/EgressPolicy"}}}}}}
+      },
+      "post": {
+        "tags": ["Networking"],
+        "operationId": "createEgressPolicy",
+        "summary": "Create a reusable egress policy",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EgressPolicyRequest"}}}},
+        "responses": {"201": {"description": "Egress policy", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EgressPolicy"}}}}}
+      }
+    },
+    "/api/egress-policies/{id}": {
+      "delete": {
+        "tags": ["Networking"],
+        "operationId": "deleteEgressPolicy",
+        "summary": "Delete an egress policy",
+        "parameters": [{"$ref": "#/components/parameters/ID"}],
+        "responses": {"200": {"description": "Deleted egress policy", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DeletedResponse"}}}}}
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "BAP API token"
+      }
+    },
+    "parameters": {
+      "ID": {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}},
+      "JobID": {"name": "job_id", "in": "path", "required": true, "schema": {"type": "string"}},
+      "RuleID": {"name": "rule_id", "in": "path", "required": true, "schema": {"type": "string"}},
+      "Lines": {"name": "lines", "in": "query", "required": false, "schema": {"type": "integer", "default": 300}}
+    },
+    "responses": {
+      "BadRequest": {"description": "Bad request", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
+      "Unauthorized": {"description": "Authentication required", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
+      "Forbidden": {"description": "Forbidden", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
+      "NotFound": {"description": "Not found", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
+      "Unprocessable": {"description": "Unprocessable entity", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+    },
+    "schemas": {
+      "Health": {
+        "type": "object",
+        "required": ["ok", "time"],
+        "properties": {"ok": {"type": "boolean"}, "time": {"type": "string", "format": "date-time"}}
+      },
+      "Session": {
+        "type": "object",
+        "required": ["user", "is_admin"],
+        "properties": {"user": {"type": "string"}, "is_admin": {"type": "boolean"}, "csrf": {"type": "string"}}
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {"error": {"$ref": "#/components/schemas/APIError"}}
+      },
+      "APIError": {
+        "type": "object",
+        "required": ["code", "message"],
+        "properties": {
+          "code": {"type": "string"},
+          "message": {"type": "string"},
+          "fields": {"type": "object", "additionalProperties": {"type": "string"}},
+          "request_id": {"type": "string"}
+        }
+      },
+      "DeletedResponse": {"type": "object", "properties": {"deleted": {"type": "string"}}},
+      "RevokedResponse": {"type": "object", "properties": {"revoked": {"type": "string"}}},
+      "LogLines": {
+        "type": "object",
+        "properties": {"path": {"type": "string"}, "lines": {"type": "array", "items": {"type": "string"}}}
+      },
+      "APIToken": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "name": {"type": "string"},
+          "prefix": {"type": "string"},
+          "is_admin": {"type": "boolean"},
+          "created_by": {"type": "string"},
+          "created_at": {"type": "string", "format": "date-time"},
+          "last_used_at": {"type": "string", "format": "date-time"},
+          "expires_at": {"type": "string", "format": "date-time"},
+          "revoked_at": {"type": "string", "format": "date-time"}
+        }
+      },
+      "APITokenCreateRequest": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {"name": {"type": "string"}, "is_admin": {"type": "boolean", "default": true}, "expires_at": {"type": "string", "format": "date-time"}}
+      },
+      "APITokenCreateResponse": {
+        "type": "object",
+        "properties": {"token": {"$ref": "#/components/schemas/APIToken"}, "secret": {"type": "string"}}
+      },
+      "HostStatus": {
+        "type": "object",
+        "properties": {
+          "checks": {"type": "object", "additionalProperties": {"type": "string"}},
+          "orphans": {"$ref": "#/components/schemas/HostOrphans"},
+          "network_conflicts": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
+        }
+      },
+      "HostOrphans": {
+        "type": "object",
+        "properties": {"taps": {"type": "array", "items": {"type": "string"}}, "bridges": {"type": "array", "items": {"type": "string"}}}
+      },
+      "SSHKey": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "name": {"type": "string"},
+          "public_key": {"type": "string"},
+          "fingerprint": {"type": "string"},
+          "key_type": {"type": "string"},
+          "created_by": {"type": "string"},
+          "created_at": {"type": "string", "format": "date-time"},
+          "last_used_at": {"type": "string", "format": "date-time"}
+        }
+      },
+      "SSHKeyRequest": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}, "public_key": {"type": "string"}}},
+      "SSHKeyGenerateResponse": {"type": "object", "properties": {"key": {"$ref": "#/components/schemas/SSHKey"}, "private_key": {"type": "string"}}},
+      "BaseImage": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "name": {"type": "string"},
+          "status": {"type": "string", "enum": ["active", "pending", "failed", "archived"]},
+          "filesystem": {"type": "string"},
+          "path": {"type": "string"},
+          "virtual_size_mib": {"type": "integer"},
+          "disk_size_bytes": {"type": "integer", "format": "int64"},
+          "checksum": {"type": "string"},
+          "packages": {"type": "string"},
+          "hooks": {"type": "string"},
+          "provenance": {"type": "string"},
+          "created_by": {"type": "string"},
+          "created_at": {"type": "string", "format": "date-time"},
+          "updated_at": {"type": "string", "format": "date-time"}
+        }
+      },
+      "RegisterBaseImageRequest": {"type": "object", "properties": {"name": {"type": "string"}, "path": {"type": "string"}, "status": {"type": "string"}, "filesystem": {"type": "string"}, "provenance": {"type": "string"}}},
+      "BuildBaseImageRequest": {"type": "object", "properties": {"name": {"type": "string"}, "filesystem": {"type": "string"}, "size_mib": {"type": "integer"}, "packages": {"type": "array", "items": {"type": "string"}}, "hook_ids": {"type": "array", "items": {"type": "string"}}}},
+      "BaseImageStatusRequest": {"type": "object", "required": ["status"], "properties": {"status": {"type": "string"}}},
+      "ImageBuildJob": {"type": "object", "additionalProperties": true},
+      "ImageHook": {"type": "object", "additionalProperties": true},
+      "ImageHookRequest": {"type": "object", "properties": {"name": {"type": "string"}, "source_type": {"type": "string"}, "content": {"type": "string"}, "git_url": {"type": "string"}, "git_ref": {"type": "string"}, "git_path": {"type": "string"}}},
+      "Kernel": {"type": "object", "additionalProperties": true},
+      "KernelDiscoveryRequest": {"type": "object", "properties": {"ci_prefix": {"type": "string"}}},
+      "KernelDiscoveryJob": {"type": "object", "additionalProperties": true},
+      "KernelDiscoveryItem": {"type": "object", "additionalProperties": true},
+      "KernelImportRequest": {"type": "object", "properties": {"name": {"type": "string"}, "version": {"type": "string"}, "ci_prefix": {"type": "string"}, "artifact_id": {"type": "string"}}},
+      "KernelUploadRequest": {
+        "type": "object",
+        "properties": {
+          "kernel": {"type": "string", "format": "binary"},
+          "config": {"type": "string", "format": "binary"},
+          "name": {"type": "string"},
+          "version": {"type": "string"},
+          "boot_args": {"type": "string"},
+          "status": {"type": "string"}
+        }
+      },
+      "KernelUpdateRequest": {"type": "object", "properties": {"name": {"type": "string"}, "status": {"type": "string"}, "boot_args": {"type": "string"}}},
+      "KernelTestJob": {"type": "object", "additionalProperties": true},
+      "VM": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "name": {"type": "string"},
+          "state": {"type": "string", "enum": ["stopped", "running", "starting", "stopping", "error"]},
+          "vcpu_count": {"type": "integer"},
+          "mem_mib": {"type": "integer"},
+          "ssh_port": {"type": "integer"},
+          "tap_name": {"type": "string"},
+          "host_ip": {"type": "string"},
+          "guest_ip": {"type": "string"},
+          "cidr": {"type": "integer"},
+          "kernel_path": {"type": "string"},
+          "kernel_id": {"type": "string"},
+          "rootfs_path": {"type": "string"},
+          "base_rootfs_path": {"type": "string"},
+          "base_image_id": {"type": "string"},
+          "rootfs_size_mib": {"type": "integer"},
+          "dev_user": {"type": "string"},
+          "ssh_key_id": {"type": "string"},
+          "managed_ssh_public_key": {"type": "string"},
+          "managed_ssh_private_key_path": {"type": "string"},
+          "extra_authorized_keys": {"type": "string"},
+          "repo_url": {"type": "string"},
+          "git_ref": {"type": "string"},
+          "egress_mode": {"type": "string"},
+          "egress_policy_id": {"type": "string"},
+          "network_mode": {"type": "string"},
+          "network_id": {"type": "string"},
+          "last_error": {"type": "string"},
+          "created_at": {"type": "string", "format": "date-time"},
+          "updated_at": {"type": "string", "format": "date-time"},
+          "last_started_at": {"type": "string", "format": "date-time"},
+          "last_stopped_at": {"type": "string", "format": "date-time"}
+        }
+      },
+      "CreateVMRequest": {
+        "type": "object",
+        "required": ["name", "vcpu_count", "mem_mib"],
+        "properties": {
+          "name": {"type": "string"},
+          "vcpu_count": {"type": "integer", "minimum": 1},
+          "mem_mib": {"type": "integer", "minimum": 128},
+          "ssh_port": {"type": "integer"},
+          "dev_user": {"type": "string", "default": "dev"},
+          "ssh_key_id": {"type": "string"},
+          "extra_authorized_keys": {"type": "string"},
+          "repo_url": {"type": "string"},
+          "git_ref": {"type": "string", "default": "HEAD"},
+          "egress_mode": {"type": "string", "enum": ["allow_all", "deny_all"]},
+          "egress_policy_id": {"type": "string"},
+          "network_mode": {"type": "string", "enum": ["routed_ptp", "shared_bridge"]},
+          "network_id": {"type": "string"},
+          "base_image_id": {"type": "string"},
+          "rootfs_size_mib": {"type": "integer"},
+          "kernel_id": {"type": "string"}
+        }
+      },
+      "ResourceRequest": {"type": "object", "properties": {"vcpu_count": {"type": "integer"}, "mem_mib": {"type": "integer"}, "restart": {"type": "boolean"}}},
+      "VMExecRequest": {"type": "object", "required": ["command"], "properties": {"command": {"type": "string"}, "timeout_seconds": {"type": "integer"}, "cwd": {"type": "string"}, "env": {"type": "object", "additionalProperties": {"type": "string"}}, "stdin": {"type": "string"}, "pty": {"type": "boolean"}}},
+      "VMExecResult": {"type": "object", "properties": {"stdout": {"type": "string"}, "stderr": {"type": "string"}, "exit_code": {"type": "integer"}, "started_at": {"type": "string", "format": "date-time"}, "finished_at": {"type": "string", "format": "date-time"}, "timed_out": {"type": "boolean"}, "truncated": {"type": "boolean"}}},
+      "VMExecJob": {"type": "object", "additionalProperties": true},
+      "VMNetworkState": {"type": "object", "properties": {"vm": {"$ref": "#/components/schemas/VM"}, "network": {"$ref": "#/components/schemas/Network"}, "ingress_rules": {"type": "array", "items": {"$ref": "#/components/schemas/IngressRule"}}, "egress_policy": {"$ref": "#/components/schemas/EgressPolicy"}}},
+      "Network": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "cidr": {"type": "string"}, "gateway_ip": {"type": "string"}, "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}}},
+      "NetworkRequest": {"type": "object", "properties": {"name": {"type": "string"}, "cidr": {"type": "string"}, "gateway_ip": {"type": "string"}}},
+      "IngressRule": {"type": "object", "properties": {"id": {"type": "string"}, "vm_id": {"type": "string"}, "protocol": {"type": "string", "enum": ["tcp", "udp"]}, "host_port": {"type": "integer"}, "guest_port": {"type": "integer"}, "description": {"type": "string"}, "created_at": {"type": "string", "format": "date-time"}}},
+      "IngressRuleRequest": {"type": "object", "properties": {"protocol": {"type": "string", "enum": ["tcp", "udp"]}, "host_port": {"type": "integer"}, "guest_port": {"type": "integer"}, "description": {"type": "string"}}},
+      "EgressPolicy": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "mode": {"type": "string"}, "tcp_ports": {"type": "string"}, "udp_ports": {"type": "string"}, "cidrs": {"type": "string"}, "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}}},
+      "EgressPolicyRequest": {"type": "object", "properties": {"name": {"type": "string"}, "mode": {"type": "string"}, "tcp_ports": {"type": "string"}, "udp_ports": {"type": "string"}, "cidrs": {"type": "string"}}},
+      "VMEgressPolicyRequest": {"type": "object", "properties": {"mode": {"type": "string"}, "egress_policy_id": {"type": "string"}}}
+    }
+  }
+}

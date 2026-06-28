@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,6 +20,8 @@ import (
 
 	"bap-web/internal/config"
 	"bap-web/internal/model"
+
+	"github.com/getkin/kin-openapi/openapi3"
 )
 
 func TestNewParsesTemplates(t *testing.T) {
@@ -107,6 +110,183 @@ func TestAPIDocsMentionAgentRoutesRegisteredByApp(t *testing.T) {
 		if !strings.Contains(string(app), route) {
 			t.Fatalf("app route registration missing %s", route)
 		}
+	}
+}
+
+func TestPublicDocsRoutesServeAgentAndSwaggerDocs(t *testing.T) {
+	a, _ := newTestApp(t)
+	defer a.Close()
+
+	cases := []struct {
+		path     string
+		contains []string
+	}{
+		{"/docs/agents", []string{"Agent Instructions", "/docs/agents.md", "/openapi.json"}},
+		{"/docs/agents.md", []string{"BAP Web Agent Guide", "Authorization: Bearer", "Agents should not expect unauthenticated operational access"}},
+		{"/llms.txt", []string{"Agent guide: /docs/agents.md", "OpenAPI specification: /openapi.json"}},
+		{"/docs/api", []string{"SwaggerUIBundle", "url: \"/openapi.json\""}},
+		{"/static/vendor/swagger-ui/swagger-ui-bundle.js", []string{"SwaggerUIBundle"}},
+		{"/static/vendor/swagger-ui/swagger-ui.css", []string{".swagger-ui"}},
+	}
+
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		rr := httptest.NewRecorder()
+
+		a.Router().ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, body = %s", tc.path, rr.Code, rr.Body.String())
+		}
+		body := rr.Body.String()
+		for _, want := range tc.contains {
+			if !strings.Contains(body, want) {
+				t.Fatalf("%s missing %q", tc.path, want)
+			}
+		}
+		if !strings.HasPrefix(tc.path, "/static/") {
+			for _, forbidden := range []string{"password=", "initial-admin.txt"} {
+				if strings.Contains(body, forbidden) {
+					t.Fatalf("%s leaks forbidden marker %q", tc.path, forbidden)
+				}
+			}
+		}
+	}
+}
+
+func TestDocsHTMLPagesPreserveAuthenticatedNavigation(t *testing.T) {
+	for _, path := range []string{"/docs/agents", "/docs/api"} {
+		t.Run("unauthenticated "+path, func(t *testing.T) {
+			a, _ := newTestApp(t)
+			defer a.Close()
+
+			body := getPathBody(t, a, path, "")
+
+			assertContains(t, body, `href="/docs/agents"`)
+			assertNotContains(t, body, `href="/ssh-keys"`)
+			assertNotContains(t, body, `href="/images"`)
+			assertNotContains(t, body, `href="/kernels"`)
+			assertNotContains(t, body, "Logout")
+		})
+
+		t.Run("admin "+path, func(t *testing.T) {
+			a, sess := newAuthenticatedTestAppWithRole(t, true)
+			defer a.Close()
+
+			body := getPathBody(t, a, path, sess.ID)
+
+			assertContains(t, body, `href="/docs/agents"`)
+			assertContains(t, body, `href="/ssh-keys"`)
+			assertContains(t, body, `href="/images"`)
+			assertContains(t, body, `href="/kernels"`)
+			assertContains(t, body, "admin")
+			assertContains(t, body, "Logout")
+		})
+
+		t.Run("normal user "+path, func(t *testing.T) {
+			a, sess := newAuthenticatedTestAppWithRole(t, false)
+			defer a.Close()
+
+			body := getPathBody(t, a, path, sess.ID)
+
+			assertContains(t, body, `href="/docs/agents"`)
+			assertContains(t, body, `href="/ssh-keys"`)
+			assertNotContains(t, body, `href="/images"`)
+			assertNotContains(t, body, `href="/kernels"`)
+			assertContains(t, body, "user")
+			assertContains(t, body, "Logout")
+		})
+	}
+}
+
+func TestOpenAPISpecValidAndCoversRegisteredAPIRoutes(t *testing.T) {
+	a, _ := newTestApp(t)
+	defer a.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
+	rr := httptest.NewRecorder()
+	a.Router().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(rr.Body.Bytes())
+	if err != nil {
+		t.Fatalf("load OpenAPI: %v", err)
+	}
+	if err := doc.Validate(context.Background()); err != nil {
+		t.Fatalf("validate OpenAPI: %v", err)
+	}
+	if doc.Components.SecuritySchemes["BearerAuth"] == nil {
+		t.Fatal("OpenAPI missing BearerAuth security scheme")
+	}
+	if len(doc.Security) == 0 || doc.Security[0]["BearerAuth"] == nil {
+		t.Fatal("OpenAPI missing global bearer auth requirement")
+	}
+
+	var raw struct {
+		Paths map[string]map[string]json.RawMessage `json:"paths"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+
+	appSource, err := os.ReadFile("app.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeRe := regexp.MustCompile(`mux\.HandleFunc\("([A-Z]+) (/api[^"]+)"`)
+	for _, match := range routeRe.FindAllStringSubmatch(string(appSource), -1) {
+		method := strings.ToLower(match[1])
+		path := match[2]
+		methods := raw.Paths[path]
+		if methods == nil {
+			t.Fatalf("OpenAPI missing path %s", path)
+		}
+		if methods[method] == nil {
+			t.Fatalf("OpenAPI missing method %s %s", strings.ToUpper(method), path)
+		}
+	}
+}
+
+func TestOpenAPIOperationsHaveStableIDsAndHealthIsPublic(t *testing.T) {
+	spec, err := os.ReadFile(filepath.Join("docs", "openapi.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		Paths map[string]map[string]struct {
+			OperationID string            `json:"operationId"`
+			Security    []map[string]any  `json:"security"`
+			Parameters  []json.RawMessage `json:"parameters"`
+			RequestBody map[string]any    `json:"requestBody"`
+			Responses   map[string]any    `json:"responses"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal(spec, &raw); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]string{}
+	for path, methods := range raw.Paths {
+		for method, op := range methods {
+			if op.OperationID == "" {
+				t.Fatalf("%s %s missing operationId", strings.ToUpper(method), path)
+			}
+			key := strings.ToUpper(method) + " " + path
+			if previous := seen[op.OperationID]; previous != "" {
+				t.Fatalf("duplicate operationId %q on %s and %s", op.OperationID, previous, key)
+			}
+			seen[op.OperationID] = key
+			if len(op.Responses) == 0 {
+				t.Fatalf("%s missing responses", key)
+			}
+		}
+	}
+	health := raw.Paths["/api/health"]["get"]
+	if health.Security == nil || len(health.Security) != 0 {
+		t.Fatalf("GET /api/health should explicitly disable auth, got %#v", health.Security)
 	}
 }
 
@@ -1156,6 +1336,36 @@ func TestUINetworkCreateOverlapRendersDashboardError(t *testing.T) {
 	body, _ := io.ReadAll(rr.Result().Body)
 	if !strings.Contains(string(body), "overlaps network base 172.31.91.0/25") {
 		t.Fatalf("missing overlap error in response: %s", string(body))
+	}
+}
+
+func getPathBody(t *testing.T, a *App, path, sessionID string) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	if sessionID != "" {
+		req.AddCookie(&http.Cookie{Name: "bap_web_session", Value: sessionID})
+	}
+	rr := httptest.NewRecorder()
+
+	a.Router().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("%s status = %d, body = %s", path, rr.Code, rr.Body.String())
+	}
+	return rr.Body.String()
+}
+
+func assertContains(t *testing.T, body, want string) {
+	t.Helper()
+	if !strings.Contains(body, want) {
+		t.Fatalf("missing %q in body: %s", want, body)
+	}
+}
+
+func assertNotContains(t *testing.T, body, want string) {
+	t.Helper()
+	if strings.Contains(body, want) {
+		t.Fatalf("unexpected %q in body: %s", want, body)
 	}
 }
 

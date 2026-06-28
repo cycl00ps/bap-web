@@ -1,0 +1,40 @@
+{{template "base_start" .}}
+<section class="stack docs-page">
+  <div class="section-heading">
+    <h1>Agent Instructions</h1>
+    <p>Use these resources when connecting an LLM or automation agent to BAP Web.</p>
+  </div>
+
+  <div class="grid">
+    <section>
+      <h2>Start Here</h2>
+      <p>Agents should use a user-supplied API token. Do not ask the platform for unauthenticated access or try to create your own token.</p>
+      <div class="button-row">
+        <a class="button secondary" href="/docs/agents.md">Markdown guide</a>
+        <a class="button secondary" href="/openapi.json">OpenAPI JSON</a>
+        <a class="button secondary" href="/docs/api">Swagger UI</a>
+        <a class="button secondary" href="/llms.txt">llms.txt</a>
+      </div>
+    </section>
+
+    <section>
+      <h2>Authentication</h2>
+      <p>Use the bearer token supplied by the user or administrator:</p>
+      <pre><code>Authorization: Bearer bap_...</code></pre>
+      <p>Prefer short-lived non-admin tokens for VM work. Use admin tokens only for image, kernel, token, and other administrative operations.</p>
+    </section>
+  </div>
+
+  <section>
+    <h2>Recommended Agent Workflow</h2>
+    <ol>
+      <li>Read <code>/docs/agents.md</code> and <code>/openapi.json</code>.</li>
+      <li>Call <code>GET /api/session</code> with the supplied bearer token to confirm identity.</li>
+      <li>Discover SSH keys, base images, kernels, networks, and egress policies.</li>
+      <li>Create and start VMs only when the user explicitly asks for that work.</li>
+      <li>Use <code>POST /api/vms/{id}/exec</code> for shell commands and inspect exit codes.</li>
+      <li>Clean up created VMs unless the user asks to keep them running.</li>
+    </ol>
+  </section>
+</section>
+{{template "base_end" .}}

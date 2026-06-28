@@ -30,7 +30,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-//go:embed templates/*.html static/*
+//go:embed templates/*.html static/* docs/*
 var webFS embed.FS
 
 type App struct {
@@ -117,6 +117,11 @@ func ensureDirs(cfg *config.Config) error {
 func (a *App) Router() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /static/", a.static)
+	mux.HandleFunc("GET /openapi.json", a.openapiSpec)
+	mux.HandleFunc("GET /docs/api", a.apiDocsPage)
+	mux.HandleFunc("GET /docs/agents", a.agentDocsPage)
+	mux.HandleFunc("GET /docs/agents.md", a.agentDocsMarkdown)
+	mux.HandleFunc("GET /llms.txt", a.llmsTxt)
 	mux.HandleFunc("GET /setup", a.setupGet)
 	mux.HandleFunc("POST /setup", a.setupPost)
 	mux.HandleFunc("GET /login", a.loginGet)
@@ -280,6 +285,37 @@ func (a *App) static(w http.ResponseWriter, r *http.Request) {
 	http.FileServer(http.FS(webFS)).ServeHTTP(w, r)
 }
 
+func (a *App) openapiSpec(w http.ResponseWriter, r *http.Request) {
+	serveEmbeddedDoc(w, "docs/openapi.json", "application/json; charset=utf-8")
+}
+
+func (a *App) agentDocsMarkdown(w http.ResponseWriter, r *http.Request) {
+	serveEmbeddedDoc(w, "docs/agents.md", "text/markdown; charset=utf-8")
+}
+
+func (a *App) llmsTxt(w http.ResponseWriter, r *http.Request) {
+	serveEmbeddedDoc(w, "docs/llms.txt", "text/plain; charset=utf-8")
+}
+
+func (a *App) apiDocsPage(w http.ResponseWriter, r *http.Request) {
+	a.render(w, "api_docs.html", map[string]any{"Title": "API Docs", "User": a.optionalBrowserUser(r)})
+}
+
+func (a *App) agentDocsPage(w http.ResponseWriter, r *http.Request) {
+	a.render(w, "docs_agents.html", map[string]any{"Title": "Agent Docs", "User": a.optionalBrowserUser(r)})
+}
+
+func serveEmbeddedDoc(w http.ResponseWriter, path, contentType string) {
+	b, err := webFS.ReadFile(path)
+	if err != nil {
+		http.Error(w, "documentation not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	_, _ = w.Write(b)
+}
+
 func (a *App) requestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rid := r.Header.Get("X-Request-ID")
@@ -441,6 +477,14 @@ func (a *App) currentUser(r *http.Request) (*model.User, *model.Session, bool) {
 		return nil, nil, false
 	}
 	return u, sess, true
+}
+
+func (a *App) optionalBrowserUser(r *http.Request) *requestUser {
+	u, sess, ok := a.currentUser(r)
+	if !ok {
+		return nil
+	}
+	return &requestUser{ID: u.ID, Username: u.Username, IsAdmin: u.IsAdmin, CSRF: sess.CSRFToken}
 }
 
 func current(r *http.Request) *requestUser {

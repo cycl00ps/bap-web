@@ -1,0 +1,22 @@
+{{template "base_start" .}}
+<section class="stack">
+  <div class="section-heading">
+    <h1>API Docs</h1>
+    <p>Interactive OpenAPI documentation for BAP Web.</p>
+  </div>
+  <div id="swagger-ui" class="swagger-panel"></div>
+</section>
+<link rel="stylesheet" href="/static/vendor/swagger-ui/swagger-ui.css">
+<script src="/static/vendor/swagger-ui/swagger-ui-bundle.js"></script>
+<script>
+  window.addEventListener("load", function () {
+    window.ui = SwaggerUIBundle({
+      url: "/openapi.json",
+      dom_id: "#swagger-ui",
+      deepLinking: true,
+      persistAuthorization: false,
+      displayRequestDuration: true
+    });
+  });
+</script>
+{{template "base_end" .}}
