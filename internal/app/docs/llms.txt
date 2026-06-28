@@ -1,0 +1,18 @@
+# BAP Web
+
+BAP Web is a Go + HTMX control plane for Firecracker microVMs.
+
+## Agent Resources
+
+- Agent guide: /docs/agents.md
+- OpenAPI specification: /openapi.json
+- Swagger UI: /docs/api
+- API health check: /api/health
+
+## Authentication
+
+Operational APIs require authentication. Agents should use an API token supplied by the user or administrator:
+
+Authorization: Bearer bap_...
+
+Agents should not expect unauthenticated operational access and should not ask BAP Web to generate a token unless the user has already authenticated as an admin and explicitly requested token creation.

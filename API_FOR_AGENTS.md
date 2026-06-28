@@ -2,6 +2,13 @@
 
 This guide is for LLMs and other programmatic clients that need to manage BAP Web MicroVMs through the API.
 
+Web-accessible agent resources are also available from a running server:
+
+- `GET /docs/agents.md`
+- `GET /llms.txt`
+- `GET /openapi.json`
+- `GET /docs/api`
+
 ## Authentication
 
 Browser sessions are supported, but agents should use API tokens.

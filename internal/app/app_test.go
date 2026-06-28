@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,6 +20,8 @@ import (
 
 	"bap-web/internal/config"
 	"bap-web/internal/model"
+
+	"github.com/getkin/kin-openapi/openapi3"
 )
 
 func TestNewParsesTemplates(t *testing.T) {
@@ -107,6 +110,138 @@ func TestAPIDocsMentionAgentRoutesRegisteredByApp(t *testing.T) {
 		if !strings.Contains(string(app), route) {
 			t.Fatalf("app route registration missing %s", route)
 		}
+	}
+}
+
+func TestPublicDocsRoutesServeAgentAndSwaggerDocs(t *testing.T) {
+	a, _ := newTestApp(t)
+	defer a.Close()
+
+	cases := []struct {
+		path     string
+		contains []string
+	}{
+		{"/docs/agents", []string{"Agent Instructions", "/docs/agents.md", "/openapi.json"}},
+		{"/docs/agents.md", []string{"BAP Web Agent Guide", "Authorization: Bearer", "Agents should not expect unauthenticated operational access"}},
+		{"/llms.txt", []string{"Agent guide: /docs/agents.md", "OpenAPI specification: /openapi.json"}},
+		{"/docs/api", []string{"SwaggerUIBundle", "url: \"/openapi.json\""}},
+		{"/static/vendor/swagger-ui/swagger-ui-bundle.js", []string{"SwaggerUIBundle"}},
+		{"/static/vendor/swagger-ui/swagger-ui.css", []string{".swagger-ui"}},
+	}
+
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		rr := httptest.NewRecorder()
+
+		a.Router().ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, body = %s", tc.path, rr.Code, rr.Body.String())
+		}
+		body := rr.Body.String()
+		for _, want := range tc.contains {
+			if !strings.Contains(body, want) {
+				t.Fatalf("%s missing %q", tc.path, want)
+			}
+		}
+		if !strings.HasPrefix(tc.path, "/static/") {
+			for _, forbidden := range []string{"password=", "initial-admin.txt"} {
+				if strings.Contains(body, forbidden) {
+					t.Fatalf("%s leaks forbidden marker %q", tc.path, forbidden)
+				}
+			}
+		}
+	}
+}
+
+func TestOpenAPISpecValidAndCoversRegisteredAPIRoutes(t *testing.T) {
+	a, _ := newTestApp(t)
+	defer a.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
+	rr := httptest.NewRecorder()
+	a.Router().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(rr.Body.Bytes())
+	if err != nil {
+		t.Fatalf("load OpenAPI: %v", err)
+	}
+	if err := doc.Validate(context.Background()); err != nil {
+		t.Fatalf("validate OpenAPI: %v", err)
+	}
+	if doc.Components.SecuritySchemes["BearerAuth"] == nil {
+		t.Fatal("OpenAPI missing BearerAuth security scheme")
+	}
+	if len(doc.Security) == 0 || doc.Security[0]["BearerAuth"] == nil {
+		t.Fatal("OpenAPI missing global bearer auth requirement")
+	}
+
+	var raw struct {
+		Paths map[string]map[string]json.RawMessage `json:"paths"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+
+	appSource, err := os.ReadFile("app.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeRe := regexp.MustCompile(`mux\.HandleFunc\("([A-Z]+) (/api[^"]+)"`)
+	for _, match := range routeRe.FindAllStringSubmatch(string(appSource), -1) {
+		method := strings.ToLower(match[1])
+		path := match[2]
+		methods := raw.Paths[path]
+		if methods == nil {
+			t.Fatalf("OpenAPI missing path %s", path)
+		}
+		if methods[method] == nil {
+			t.Fatalf("OpenAPI missing method %s %s", strings.ToUpper(method), path)
+		}
+	}
+}
+
+func TestOpenAPIOperationsHaveStableIDsAndHealthIsPublic(t *testing.T) {
+	spec, err := os.ReadFile(filepath.Join("docs", "openapi.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		Paths map[string]map[string]struct {
+			OperationID string            `json:"operationId"`
+			Security    []map[string]any  `json:"security"`
+			Parameters  []json.RawMessage `json:"parameters"`
+			RequestBody map[string]any    `json:"requestBody"`
+			Responses   map[string]any    `json:"responses"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal(spec, &raw); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]string{}
+	for path, methods := range raw.Paths {
+		for method, op := range methods {
+			if op.OperationID == "" {
+				t.Fatalf("%s %s missing operationId", strings.ToUpper(method), path)
+			}
+			key := strings.ToUpper(method) + " " + path
+			if previous := seen[op.OperationID]; previous != "" {
+				t.Fatalf("duplicate operationId %q on %s and %s", op.OperationID, previous, key)
+			}
+			seen[op.OperationID] = key
+			if len(op.Responses) == 0 {
+				t.Fatalf("%s missing responses", key)
+			}
+		}
+	}
+	health := raw.Paths["/api/health"]["get"]
+	if health.Security == nil || len(health.Security) != 0 {
+		t.Fatalf("GET /api/health should explicitly disable auth, got %#v", health.Security)
 	}
 }
 

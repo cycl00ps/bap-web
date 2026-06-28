@@ -88,5 +88,10 @@ th { background: #eef3f5; font-size: 13px; color: #40505b; }
 .log-view { min-height: 260px; max-height: 560px; overflow: auto; background: #0f1418; color: #d7e6ee; border-radius: 8px; padding: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; white-space: pre-wrap; }
 .log-details .hint { margin-top: 8px; }
 .log-details .log-view { margin-top: 12px; }
+.docs-page section, .swagger-panel { background: #fff; border: 1px solid #d9e0e4; border-radius: 8px; padding: 20px; min-width: 0; }
+.docs-page pre { overflow: auto; background: #0f1418; color: #d7e6ee; border-radius: 8px; padding: 12px; }
+.button-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.swagger-panel { overflow: auto; }
+.swagger-panel .swagger-ui .wrapper { padding: 0; max-width: none; }
 @media (max-width: 1180px) { .grid, .wide-main, .split, .dashboard-grid { grid-template-columns: 1fr; } .page-head { display: grid; } }
 @media (max-width: 640px) { .topbar { padding: 10px 14px; } .layout { padding: 14px; } .two-col { grid-template-columns: 1fr; } th, td { padding: 8px; } table { min-width: 640px; } .terminal-input { display: grid; } }
