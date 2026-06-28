@@ -154,6 +154,51 @@ func TestPublicDocsRoutesServeAgentAndSwaggerDocs(t *testing.T) {
 	}
 }
 
+func TestDocsHTMLPagesPreserveAuthenticatedNavigation(t *testing.T) {
+	for _, path := range []string{"/docs/agents", "/docs/api"} {
+		t.Run("unauthenticated "+path, func(t *testing.T) {
+			a, _ := newTestApp(t)
+			defer a.Close()
+
+			body := getPathBody(t, a, path, "")
+
+			assertContains(t, body, `href="/docs/agents"`)
+			assertNotContains(t, body, `href="/ssh-keys"`)
+			assertNotContains(t, body, `href="/images"`)
+			assertNotContains(t, body, `href="/kernels"`)
+			assertNotContains(t, body, "Logout")
+		})
+
+		t.Run("admin "+path, func(t *testing.T) {
+			a, sess := newAuthenticatedTestAppWithRole(t, true)
+			defer a.Close()
+
+			body := getPathBody(t, a, path, sess.ID)
+
+			assertContains(t, body, `href="/docs/agents"`)
+			assertContains(t, body, `href="/ssh-keys"`)
+			assertContains(t, body, `href="/images"`)
+			assertContains(t, body, `href="/kernels"`)
+			assertContains(t, body, "admin")
+			assertContains(t, body, "Logout")
+		})
+
+		t.Run("normal user "+path, func(t *testing.T) {
+			a, sess := newAuthenticatedTestAppWithRole(t, false)
+			defer a.Close()
+
+			body := getPathBody(t, a, path, sess.ID)
+
+			assertContains(t, body, `href="/docs/agents"`)
+			assertContains(t, body, `href="/ssh-keys"`)
+			assertNotContains(t, body, `href="/images"`)
+			assertNotContains(t, body, `href="/kernels"`)
+			assertContains(t, body, "user")
+			assertContains(t, body, "Logout")
+		})
+	}
+}
+
 func TestOpenAPISpecValidAndCoversRegisteredAPIRoutes(t *testing.T) {
 	a, _ := newTestApp(t)
 	defer a.Close()
@@ -1291,6 +1336,36 @@ func TestUINetworkCreateOverlapRendersDashboardError(t *testing.T) {
 	body, _ := io.ReadAll(rr.Result().Body)
 	if !strings.Contains(string(body), "overlaps network base 172.31.91.0/25") {
 		t.Fatalf("missing overlap error in response: %s", string(body))
+	}
+}
+
+func getPathBody(t *testing.T, a *App, path, sessionID string) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	if sessionID != "" {
+		req.AddCookie(&http.Cookie{Name: "bap_web_session", Value: sessionID})
+	}
+	rr := httptest.NewRecorder()
+
+	a.Router().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("%s status = %d, body = %s", path, rr.Code, rr.Body.String())
+	}
+	return rr.Body.String()
+}
+
+func assertContains(t *testing.T, body, want string) {
+	t.Helper()
+	if !strings.Contains(body, want) {
+		t.Fatalf("missing %q in body: %s", want, body)
+	}
+}
+
+func assertNotContains(t *testing.T, body, want string) {
+	t.Helper()
+	if strings.Contains(body, want) {
+		t.Fatalf("unexpected %q in body: %s", want, body)
 	}
 }
 

@@ -298,11 +298,11 @@ func (a *App) llmsTxt(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) apiDocsPage(w http.ResponseWriter, r *http.Request) {
-	a.render(w, "api_docs.html", map[string]any{"Title": "API Docs"})
+	a.render(w, "api_docs.html", map[string]any{"Title": "API Docs", "User": a.optionalBrowserUser(r)})
 }
 
 func (a *App) agentDocsPage(w http.ResponseWriter, r *http.Request) {
-	a.render(w, "docs_agents.html", map[string]any{"Title": "Agent Docs"})
+	a.render(w, "docs_agents.html", map[string]any{"Title": "Agent Docs", "User": a.optionalBrowserUser(r)})
 }
 
 func serveEmbeddedDoc(w http.ResponseWriter, path, contentType string) {
@@ -477,6 +477,14 @@ func (a *App) currentUser(r *http.Request) (*model.User, *model.Session, bool) {
 		return nil, nil, false
 	}
 	return u, sess, true
+}
+
+func (a *App) optionalBrowserUser(r *http.Request) *requestUser {
+	u, sess, ok := a.currentUser(r)
+	if !ok {
+		return nil
+	}
+	return &requestUser{ID: u.ID, Username: u.Username, IsAdmin: u.IsAdmin, CSRF: sess.CSRFToken}
 }
 
 func current(r *http.Request) *requestUser {
