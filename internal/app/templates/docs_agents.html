@@ -8,7 +8,7 @@
   <div class="grid">
     <section>
       <h2>Start Here</h2>
-      <p>Agents should use a user-supplied API token. Do not ask the platform for unauthenticated access or try to create your own token.</p>
+      <p>Agents should use a user-supplied API token. Do not ask the platform for unauthenticated access or try to create your own token unless the user explicitly asks.</p>
       <div class="button-row">
         <a class="button secondary" href="/docs/agents.md">Markdown guide</a>
         <a class="button secondary" href="/openapi.json">OpenAPI JSON</a>
@@ -21,7 +21,7 @@
       <h2>Authentication</h2>
       <p>Use the bearer token supplied by the user or administrator:</p>
       <pre><code>Authorization: Bearer bap_...</code></pre>
-      <p>Prefer short-lived non-admin tokens for VM work. Use admin tokens only for image, kernel, token, and other administrative operations.</p>
+      <p>Prefer short-lived non-admin tokens for VM work. Token expiry defaults to 30 days. Use admin tokens only for image, kernel, token, and other administrative operations.</p>
     </section>
   </div>
 

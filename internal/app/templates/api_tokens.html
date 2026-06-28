@@ -1,0 +1,110 @@
+{{template "base_start" .}}
+<section class="page-head">
+  <div>
+    <h1>API Tokens</h1>
+    <p class="hint">Create and revoke bearer tokens for API clients, LLM agents, and automation.</p>
+  </div>
+</section>
+
+{{if .Error}}
+<div class="notice error">{{.Error}}</div>
+{{end}}
+
+{{if .Secret}}
+<div class="notice warning">
+  <h2>Token Secret</h2>
+  <p>This token secret is shown once. BAP Web stores only a hash and cannot recover it later.</p>
+  <textarea class="key-export" readonly>{{.Secret}}</textarea>
+</div>
+{{end}}
+
+<section class="split">
+  <div>
+    <h2>Tokens</h2>
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Owner</th>
+          <th>Scope</th>
+          <th>Status</th>
+          <th>Prefix</th>
+          <th>Expires</th>
+          <th>Last Used</th>
+          <th>Created</th>
+          <th>Created By</th>
+          <th class="table-actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+      {{range .Tokens}}
+        <tr>
+          <td>{{.Name}}</td>
+          <td>{{if .OwnerUsername}}{{.OwnerUsername}}{{else}}legacy{{end}}</td>
+          <td>{{.Scope}}</td>
+          <td><span class="state {{.Status}}">{{.Status}}</span></td>
+          <td><code>{{.Prefix}}</code></td>
+          <td>{{if .ExpiresAt}}{{.ExpiresAt}}{{else}}never{{end}}</td>
+          <td>{{if .LastUsedAt}}{{.LastUsedAt}}{{else}}never{{end}}</td>
+          <td>{{.CreatedAt}}</td>
+          <td>{{.CreatedBy}}</td>
+          <td class="actions">
+            {{if eq .Status "active"}}
+            <form method="post" action="/ui/api-tokens/{{.ID}}/action" class="action-select-form" data-confirm-revoke="Revoke this API token?">
+              <input type="hidden" name="csrf" value="{{$.User.CSRF}}">
+              <select name="action" aria-label="API token action">
+                <option value="revoke">Revoke</option>
+              </select>
+              <button class="secondary" type="submit">Confirm</button>
+            </form>
+            {{else}}
+            <span class="hint">No actions</span>
+            {{end}}
+          </td>
+        </tr>
+      {{else}}
+        <tr><td colspan="10">No API tokens yet.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    </div>
+  </div>
+
+  <aside class="panel">
+    <h2>Create Token</h2>
+    <form method="post" action="/ui/api-tokens" class="stack">
+      <input type="hidden" name="csrf" value="{{.User.CSRF}}">
+      <label>Name <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value="{{.Form.Name}}"></label>
+      {{if .User.IsAdmin}}
+      <label>Owner
+        <select name="owner_user_id">
+          {{range .Users}}
+          <option value="{{.ID}}" {{if eq $.Form.OwnerUserID .ID}}selected{{end}}>{{.Username}}{{if .IsAdmin}} (admin){{end}}</option>
+          {{end}}
+        </select>
+      </label>
+      <label class="checkbox"><input type="checkbox" name="is_admin" value="true" {{if .Form.IsAdmin}}checked{{end}}> Admin token</label>
+      {{else}}
+      <input type="hidden" name="owner_user_id" value="{{.User.ID}}">
+      <p class="hint">This token will use your current permission level.</p>
+      {{end}}
+      <label>Expires at <input name="expires_at" required value="{{.Form.ExpiresAt}}"></label>
+      <p class="hint">Use RFC3339 UTC time. The default is 30 days from now.</p>
+      <button type="submit">Create Token</button>
+    </form>
+  </aside>
+</section>
+
+<script>
+(() => {
+  document.querySelectorAll("[data-confirm-revoke]").forEach(form => {
+    form.addEventListener("submit", event => {
+      if (!window.confirm(form.dataset.confirmRevoke || "Revoke this API token?")) {
+        event.preventDefault();
+      }
+    });
+  });
+})();
+</script>
+{{template "base_end" .}}

@@ -299,15 +299,17 @@ type KernelDiscoveryItem struct {
 }
 
 type APIToken struct {
-	ID         string     `json:"id"`
-	Name       string     `json:"name"`
-	Prefix     string     `json:"prefix"`
-	IsAdmin    bool       `json:"is_admin"`
-	CreatedBy  string     `json:"created_by"`
-	CreatedAt  time.Time  `json:"created_at"`
-	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
-	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
-	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
+	ID            string     `json:"id"`
+	Name          string     `json:"name"`
+	Prefix        string     `json:"prefix"`
+	IsAdmin       bool       `json:"is_admin"`
+	OwnerUserID   string     `json:"owner_user_id"`
+	OwnerUsername string     `json:"owner_username"`
+	CreatedBy     string     `json:"created_by"`
+	CreatedAt     time.Time  `json:"created_at"`
+	LastUsedAt    *time.Time `json:"last_used_at,omitempty"`
+	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	RevokedAt     *time.Time `json:"revoked_at,omitempty"`
 }
 
 type VMExecJob struct {

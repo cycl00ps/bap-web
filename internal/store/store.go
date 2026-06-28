@@ -64,10 +64,11 @@ func (s *Store) migrate(ctx context.Context) error {
 		);`,
 		`CREATE TABLE IF NOT EXISTS api_tokens (
 			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL UNIQUE,
+			name TEXT NOT NULL,
 			token_hash TEXT NOT NULL UNIQUE,
 			prefix TEXT NOT NULL,
 			is_admin INTEGER NOT NULL DEFAULT 0,
+			owner_user_id TEXT NOT NULL DEFAULT '',
 			created_by TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			last_used_at TEXT,
@@ -303,6 +304,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "vms", "kernel_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	if err := s.migrateAPITokens(ctx); err != nil {
+		return err
+	}
 	return s.migrateLegacySSHKeys(ctx)
 }
 
@@ -329,6 +333,145 @@ func (s *Store) ensureColumn(ctx context.Context, table, column, definition stri
 	}
 	_, err = s.db.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+column+` `+definition)
 	return err
+}
+
+func (s *Store) migrateAPITokens(ctx context.Context) error {
+	if err := s.ensureColumn(ctx, "api_tokens", "owner_user_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE api_tokens
+		SET owner_user_id = (
+			SELECT users.id FROM users WHERE users.username = api_tokens.created_by
+		)
+		WHERE owner_user_id = ''
+		  AND created_by != ''
+		  AND EXISTS (SELECT 1 FROM users WHERE users.username = api_tokens.created_by)
+	`); err != nil {
+		return err
+	}
+	hasGlobalNameUnique, err := s.apiTokensHaveGlobalNameUnique(ctx)
+	if err != nil {
+		return err
+	}
+	if hasGlobalNameUnique {
+		if err := s.rebuildAPITokens(ctx); err != nil {
+			return err
+		}
+	}
+	_, err = s.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS api_tokens_owner_name_idx ON api_tokens(owner_user_id, name)`)
+	return err
+}
+
+func (s *Store) apiTokensHaveGlobalNameUnique(ctx context.Context) (bool, error) {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA index_list(api_tokens)`)
+	if err != nil {
+		return false, err
+	}
+	type indexInfo struct {
+		name   string
+		unique bool
+	}
+	indexes := []indexInfo{}
+	for rows.Next() {
+		var seq int
+		var name string
+		var unique int
+		var origin string
+		var partial int
+		if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+			rows.Close()
+			return false, err
+		}
+		indexes = append(indexes, indexInfo{name: name, unique: unique == 1})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return false, err
+	}
+	if err := rows.Close(); err != nil {
+		return false, err
+	}
+	for _, index := range indexes {
+		if !index.unique {
+			continue
+		}
+		cols, err := s.indexColumns(ctx, index.name)
+		if err != nil {
+			return false, err
+		}
+		if len(cols) == 1 && cols[0] == "name" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *Store) indexColumns(ctx context.Context, indexName string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA index_info(`+quoteIdent(indexName)+`)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	cols := []string{}
+	for rows.Next() {
+		var seqno int
+		var cid int
+		var name string
+		if err := rows.Scan(&seqno, &cid, &name); err != nil {
+			return nil, err
+		}
+		cols = append(cols, name)
+	}
+	return cols, rows.Err()
+}
+
+func quoteIdent(s string) string {
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
+
+func (s *Store) rebuildAPITokens(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE api_tokens_new (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			token_hash TEXT NOT NULL UNIQUE,
+			prefix TEXT NOT NULL,
+			is_admin INTEGER NOT NULL DEFAULT 0,
+			owner_user_id TEXT NOT NULL DEFAULT '',
+			created_by TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			last_used_at TEXT,
+			expires_at TEXT,
+			revoked_at TEXT
+		)
+	`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO api_tokens_new (
+			id, name, token_hash, prefix, is_admin, owner_user_id, created_by,
+			created_at, last_used_at, expires_at, revoked_at
+		)
+		SELECT
+			id, name, token_hash, prefix, is_admin, owner_user_id, created_by,
+			created_at, last_used_at, expires_at, revoked_at
+		FROM api_tokens
+	`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DROP TABLE api_tokens`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE api_tokens_new RENAME TO api_tokens`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) migrateLegacySSHKeys(ctx context.Context) error {
@@ -433,6 +576,23 @@ func (s *Store) UserByID(ctx context.Context, id string) (*model.User, error) {
 	return scanUser(row)
 }
 
+func (s *Store) ListUsers(ctx context.Context) ([]model.User, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, username, password_hash, is_admin, created_at FROM users ORDER BY username`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.User{}
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *u)
+	}
+	return out, rows.Err()
+}
+
 type rowScanner interface {
 	Scan(dest ...any) error
 }
@@ -485,16 +645,28 @@ func (s *Store) DeleteSession(ctx context.Context, id string) error {
 }
 
 func (s *Store) CreateAPIToken(ctx context.Context, token model.APIToken, tokenHash string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO api_tokens (id, name, token_hash, prefix, is_admin, created_by, created_at, last_used_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		token.ID, token.Name, tokenHash, token.Prefix, boolInt(token.IsAdmin), token.CreatedBy, token.CreatedAt.UTC().Format(time.RFC3339Nano), timePtrString(token.LastUsedAt), timePtrString(token.ExpiresAt), timePtrString(token.RevokedAt))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO api_tokens (id, name, token_hash, prefix, is_admin, owner_user_id, created_by, created_at, last_used_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		token.ID, token.Name, tokenHash, token.Prefix, boolInt(token.IsAdmin), token.OwnerUserID, token.CreatedBy, token.CreatedAt.UTC().Format(time.RFC3339Nano), timePtrString(token.LastUsedAt), timePtrString(token.ExpiresAt), timePtrString(token.RevokedAt))
 	return err
 }
 
 func (s *Store) ListAPITokens(ctx context.Context) ([]model.APIToken, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, prefix, is_admin, created_by, created_at, last_used_at, expires_at, revoked_at FROM api_tokens ORDER BY created_at DESC`)
+	rows, err := s.db.QueryContext(ctx, apiTokenSelectSQL()+` ORDER BY t.created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
+	return scanAPITokens(rows)
+}
+
+func (s *Store) ListAPITokensByOwner(ctx context.Context, ownerUserID string) ([]model.APIToken, error) {
+	rows, err := s.db.QueryContext(ctx, apiTokenSelectSQL()+` WHERE t.owner_user_id = ? ORDER BY t.created_at DESC`, ownerUserID)
+	if err != nil {
+		return nil, err
+	}
+	return scanAPITokens(rows)
+}
+
+func scanAPITokens(rows *sql.Rows) ([]model.APIToken, error) {
 	defer rows.Close()
 	out := []model.APIToken{}
 	for rows.Next() {
@@ -507,8 +679,13 @@ func (s *Store) ListAPITokens(ctx context.Context) ([]model.APIToken, error) {
 	return out, rows.Err()
 }
 
+func (s *Store) GetAPITokenByID(ctx context.Context, id string) (*model.APIToken, error) {
+	row := s.db.QueryRowContext(ctx, apiTokenSelectSQL()+` WHERE t.id = ?`, id)
+	return scanAPIToken(row)
+}
+
 func (s *Store) GetAPITokenByHash(ctx context.Context, tokenHash string) (*model.APIToken, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, name, prefix, is_admin, created_by, created_at, last_used_at, expires_at, revoked_at FROM api_tokens WHERE token_hash = ?`, tokenHash)
+	row := s.db.QueryRowContext(ctx, apiTokenSelectSQL()+` WHERE t.token_hash = ?`, tokenHash)
 	return scanAPIToken(row)
 }
 
@@ -527,7 +704,7 @@ func scanAPIToken(row rowScanner) (*model.APIToken, error) {
 	var admin int
 	var created string
 	var lastUsed, expires, revoked sql.NullString
-	if err := row.Scan(&token.ID, &token.Name, &token.Prefix, &admin, &token.CreatedBy, &created, &lastUsed, &expires, &revoked); err != nil {
+	if err := row.Scan(&token.ID, &token.Name, &token.Prefix, &admin, &token.OwnerUserID, &token.OwnerUsername, &token.CreatedBy, &created, &lastUsed, &expires, &revoked); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -539,6 +716,10 @@ func scanAPIToken(row rowScanner) (*model.APIToken, error) {
 	token.ExpiresAt = parseNullTime(expires)
 	token.RevokedAt = parseNullTime(revoked)
 	return &token, nil
+}
+
+func apiTokenSelectSQL() string {
+	return `SELECT t.id, t.name, t.prefix, t.is_admin, t.owner_user_id, COALESCE(u.username, ''), t.created_by, t.created_at, t.last_used_at, t.expires_at, t.revoked_at FROM api_tokens t LEFT JOIN users u ON u.id = t.owner_user_id`
 }
 
 func (s *Store) CreateSSHKey(ctx context.Context, key model.SSHKey) error {
