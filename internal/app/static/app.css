@@ -67,6 +67,11 @@ th { background: #eef3f5; font-size: 13px; color: #40505b; }
 .scan-status { display: grid; gap: 8px; }
 .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
 .tabs a { color: #172026; background: #fff; border: 1px solid #d9e0e4; border-radius: 6px; padding: 8px 10px; text-decoration: none; }
+.filter-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; }
+.filter-tabs a { color: #172026; background: #fff; border: 1px solid #d9e0e4; border-radius: 6px; padding: 8px 10px; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; }
+.filter-tabs a.active { background: #175a8a; border-color: #175a8a; color: #fff; }
+.filter-tabs span { color: inherit; font-size: 12px; opacity: 0.85; }
+.token-audit-hint { margin-bottom: 12px; }
 .inline-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; align-items: end; margin: 14px 0; }
 .checkbox { display: flex; align-items: center; gap: 8px; }
 .checkbox input { width: auto; }

@@ -511,6 +511,78 @@ func TestAPITokensPageCreateAndRoleControls(t *testing.T) {
 	}
 }
 
+func TestAPITokensPageFiltersByStatus(t *testing.T) {
+	a, sess := newAuthenticatedTestApp(t)
+	defer a.Close()
+	now := time.Now().UTC()
+	expiredAt := now.Add(-time.Hour)
+	revokedAt := now.Add(-time.Minute)
+	createTestAPIToken(t, a, model.APIToken{ID: "active-token-id", Name: "active-token", Prefix: "bap_active", IsAdmin: true, OwnerUserID: "u1", CreatedBy: "admin", CreatedAt: now, ExpiresAt: ptrTime(now.Add(time.Hour))})
+	createTestAPIToken(t, a, model.APIToken{ID: "expired-token-id", Name: "expired-token", Prefix: "bap_expired", IsAdmin: true, OwnerUserID: "u1", CreatedBy: "admin", CreatedAt: now.Add(-time.Minute), ExpiresAt: &expiredAt})
+	createTestAPIToken(t, a, model.APIToken{ID: "revoked-token-id", Name: "revoked-token", Prefix: "bap_revoked", IsAdmin: true, OwnerUserID: "u1", CreatedBy: "admin", CreatedAt: now.Add(-2 * time.Minute), RevokedAt: &revokedAt})
+
+	cases := []struct {
+		path    string
+		want    []string
+		notWant []string
+	}{
+		{path: "/tokens", want: []string{"active-token", "Active <span>1</span>", "Revoked <span>1</span>", "Expired <span>1</span>", "All <span>3</span>"}, notWant: []string{"expired-token", "revoked-token"}},
+		{path: "/tokens?status=revoked", want: []string{"revoked-token"}, notWant: []string{"active-token", "expired-token"}},
+		{path: "/tokens?status=expired", want: []string{"expired-token"}, notWant: []string{"active-token", "revoked-token"}},
+		{path: "/tokens?status=all", want: []string{"active-token", "expired-token", "revoked-token"}, notWant: nil},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		req.AddCookie(&http.Cookie{Name: "bap_web_session", Value: sess.ID})
+		rr := httptest.NewRecorder()
+		a.Router().ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, body = %s", tc.path, rr.Code, rr.Body.String())
+		}
+		body := rr.Body.String()
+		for _, want := range tc.want {
+			if !strings.Contains(body, want) {
+				t.Fatalf("%s missing %q in body %s", tc.path, want, body)
+			}
+		}
+		for _, notWant := range tc.notWant {
+			if strings.Contains(body, notWant) {
+				t.Fatalf("%s unexpectedly contained %q in body %s", tc.path, notWant, body)
+			}
+		}
+	}
+}
+
+func TestAPITokensPageFilterKeepsOwnerIsolationAndRevokeRedirect(t *testing.T) {
+	a, adminSess := newAuthenticatedTestApp(t)
+	defer a.Close()
+	dev := addTestUser(t, a, "u2", "dev", false)
+	devSess := addTestSession(t, a, "sess-dev-filter", dev)
+	now := time.Now().UTC()
+	createTestAPIToken(t, a, model.APIToken{ID: "admin-token-id", Name: "admin-visible-token", Prefix: "bap_admin", IsAdmin: true, OwnerUserID: "u1", CreatedBy: "admin", CreatedAt: now, ExpiresAt: ptrTime(now.Add(time.Hour))})
+	createTestAPIToken(t, a, model.APIToken{ID: "dev-token-id", Name: "dev-visible-token", Prefix: "bap_dev", OwnerUserID: "u2", CreatedBy: "dev", CreatedAt: now, ExpiresAt: ptrTime(now.Add(time.Hour))})
+
+	userReq := httptest.NewRequest(http.MethodGet, "/tokens?status=all", nil)
+	userReq.AddCookie(&http.Cookie{Name: "bap_web_session", Value: devSess.ID})
+	userRR := httptest.NewRecorder()
+	a.Router().ServeHTTP(userRR, userReq)
+	if userRR.Code != http.StatusOK || !strings.Contains(userRR.Body.String(), "dev-visible-token") || strings.Contains(userRR.Body.String(), "admin-visible-token") {
+		t.Fatalf("user filtered tokens page = %d, body = %s", userRR.Code, userRR.Body.String())
+	}
+
+	form := url.Values{}
+	form.Set("csrf", adminSess.CSRFToken)
+	form.Set("action", "revoke")
+	revokeReq := httptest.NewRequest(http.MethodPost, "/ui/api-tokens/admin-token-id/action?status=all", strings.NewReader(form.Encode()))
+	revokeReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	revokeReq.AddCookie(&http.Cookie{Name: "bap_web_session", Value: adminSess.ID})
+	revokeRR := httptest.NewRecorder()
+	a.Router().ServeHTTP(revokeRR, revokeReq)
+	if revokeRR.Code != http.StatusSeeOther || revokeRR.Header().Get("Location") != "/tokens?status=all" {
+		t.Fatalf("revoke redirect = %d %q, body = %s", revokeRR.Code, revokeRR.Header().Get("Location"), revokeRR.Body.String())
+	}
+}
+
 func TestAPIBaseImageListIncludesDefaultImage(t *testing.T) {
 	a, sess := newAuthenticatedTestApp(t)
 	defer a.Close()
@@ -1673,6 +1745,17 @@ func addTestSession(t *testing.T, a *App, id string, u model.User) model.Session
 		t.Fatal(err)
 	}
 	return sess
+}
+
+func createTestAPIToken(t *testing.T, a *App, token model.APIToken) {
+	t.Helper()
+	if err := a.store.CreateAPIToken(context.Background(), token, "hash-"+token.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func ptrTime(t time.Time) *time.Time {
+	return &t
 }
 
 func createTestVM(t *testing.T, a *App, vm model.VM) {

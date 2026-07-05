@@ -14,6 +14,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -842,6 +843,21 @@ type apiTokenView struct {
 	Scope  string
 }
 
+type apiTokenFilter struct {
+	Key    string
+	Label  string
+	Count  int
+	Active bool
+	Href   string
+}
+
+type apiTokenCounts struct {
+	Active  int
+	Revoked int
+	Expired int
+	All     int
+}
+
 func (a *App) apiTokensPage(w http.ResponseWriter, r *http.Request) {
 	a.renderAPITokensPage(w, r, nil)
 }
@@ -872,9 +888,14 @@ func (a *App) renderAPITokensPage(w http.ResponseWriter, r *http.Request, data m
 	if _, ok := data["Form"]; !ok {
 		data["Form"] = defaultAPITokenForm(current(r))
 	}
+	filter := apiTokenFilterFromRequest(r)
+	views, counts := apiTokenViews(tokens)
 	data["Title"] = "API Tokens"
 	data["User"] = current(r)
-	data["Tokens"] = apiTokenViews(tokens)
+	data["Tokens"] = filterAPITokenViews(views, filter)
+	data["TokenFilters"] = apiTokenFilters(filter, counts)
+	data["TokenFilter"] = filter
+	data["TokenCounts"] = counts
 	data["Users"] = users
 	a.render(w, "api_tokens.html", data)
 }
@@ -886,15 +907,75 @@ func defaultAPITokenForm(u *requestUser) apiTokenForm {
 	}
 }
 
-func apiTokenViews(tokens []model.APIToken) []apiTokenView {
+func apiTokenViews(tokens []model.APIToken) ([]apiTokenView, apiTokenCounts) {
 	out := make([]apiTokenView, 0, len(tokens))
+	counts := apiTokenCounts{All: len(tokens)}
 	now := time.Now().UTC()
 	for _, token := range tokens {
 		scope := "user"
 		if token.IsAdmin {
 			scope = "admin"
 		}
-		out = append(out, apiTokenView{APIToken: token, Status: apiTokenStatus(token, now), Scope: scope})
+		status := apiTokenStatus(token, now)
+		switch status {
+		case "active":
+			counts.Active++
+		case "revoked":
+			counts.Revoked++
+		case "expired":
+			counts.Expired++
+		}
+		out = append(out, apiTokenView{APIToken: token, Status: status, Scope: scope})
+	}
+	return out, counts
+}
+
+func apiTokenFilterFromRequest(r *http.Request) string {
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status"))) {
+	case "revoked":
+		return "revoked"
+	case "expired":
+		return "expired"
+	case "all":
+		return "all"
+	default:
+		return "active"
+	}
+}
+
+func filterAPITokenViews(tokens []apiTokenView, filter string) []apiTokenView {
+	if filter == "all" {
+		return tokens
+	}
+	out := make([]apiTokenView, 0, len(tokens))
+	for _, token := range tokens {
+		if token.Status == filter {
+			out = append(out, token)
+		}
+	}
+	return out
+}
+
+func apiTokenFilters(active string, counts apiTokenCounts) []apiTokenFilter {
+	items := []struct {
+		key   string
+		label string
+		count int
+	}{
+		{key: "active", label: "Active", count: counts.Active},
+		{key: "revoked", label: "Revoked", count: counts.Revoked},
+		{key: "expired", label: "Expired", count: counts.Expired},
+		{key: "all", label: "All", count: counts.All},
+	}
+	out := make([]apiTokenFilter, 0, len(items))
+	for _, item := range items {
+		out = append(out, apiTokenFilter{
+			Key:    item.key,
+			Label:  item.label,
+			Count:  item.count,
+			Active: item.key == active,
+			Href:   "/tokens?status=" + url.QueryEscape(item.key),
+		})
 	}
 	return out
 }
@@ -944,7 +1025,8 @@ func (a *App) uiAPITokenAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = a.store.Audit(r.Context(), current(r).Username, sourceIP(r), "api_token_revoke", "api-token:"+id, "success", reqID(r), "")
-	http.Redirect(w, r, "/tokens", http.StatusSeeOther)
+	filter := apiTokenFilterFromRequest(r)
+	http.Redirect(w, r, "/tokens?status="+url.QueryEscape(filter), http.StatusSeeOther)
 }
 
 func (a *App) imagesPage(w http.ResponseWriter, r *http.Request) {
