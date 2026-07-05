@@ -63,9 +63,12 @@
   <div id="terminal-shell" class="terminal-shell">
     <div id="terminal" class="terminal"></div>
   </div>
-  <form id="term-form" class="terminal-input" hidden>
+  <form id="term-form" class="terminal-input">
     <input id="term-input" autocomplete="off" placeholder="Type command input and press enter">
     <button type="submit">Send</button>
+    <button id="term-copy" type="button" class="secondary">Copy</button>
+    <button id="term-paste" type="button" class="secondary">Paste</button>
+    <span id="term-clipboard-status" class="terminal-status" role="status" aria-live="polite"></span>
   </form>
   <script src="/static/vendor/xterm/xterm.js"></script>
   <script>
@@ -73,8 +76,51 @@
     const shell = document.getElementById('terminal-shell');
     const form = document.getElementById('term-form');
     const input = document.getElementById('term-input');
+    const copyButton = document.getElementById('term-copy');
+    const pasteButton = document.getElementById('term-paste');
+    const clipboardStatus = document.getElementById('term-clipboard-status');
     const term = window.Terminal ? new Terminal({cursorBlink: true, scrollback: 1000}) : null;
     const cell = {width: 9, height: 18};
+    let statusTimer = null;
+    let lastPasteText = "";
+    let lastPasteAt = 0;
+    const setClipboardStatus = text => {
+      window.clearTimeout(statusTimer);
+      clipboardStatus.textContent = text;
+      statusTimer = window.setTimeout(() => { clipboardStatus.textContent = ""; }, 3000);
+    };
+    const sendTerminalData = data => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(data);
+    };
+    const pasteTerminalData = data => {
+      if (!data) return;
+      if (term && typeof term.paste === 'function') term.paste(data);
+      else sendTerminalData(data);
+    };
+    const focusTerminal = () => {
+      if (term && typeof term.focus === 'function') term.focus();
+      else input.focus();
+    };
+    const canReadClipboard = () => Boolean(window.isSecureContext && navigator.clipboard && navigator.clipboard.readText);
+    const copyViaHiddenTextarea = text => {
+      const fallback = document.createElement('textarea');
+      fallback.value = text;
+      fallback.setAttribute('readonly', '');
+      fallback.style.position = 'fixed';
+      fallback.style.left = '-9999px';
+      fallback.style.top = '0';
+      document.body.appendChild(fallback);
+      fallback.focus();
+      fallback.select();
+      let copied = false;
+      try {
+        copied = document.execCommand("copy");
+      } finally {
+        document.body.removeChild(fallback);
+        focusTerminal();
+      }
+      return copied;
+    };
     const terminalSize = () => {
       const rect = shell.getBoundingClientRect();
       return {
@@ -101,7 +147,6 @@
       }
     } else {
       box.classList.add('terminal-fallback');
-      form.hidden = false;
     }
     const initialSize = applyTerminalSize();
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/vms/{{.VM.ID}}/terminal?cols=${initialSize.cols}&rows=${initialSize.rows}`);
@@ -119,7 +164,44 @@
       }
     };
     ws.onopen = sendResize;
-    if (term) term.onData(data => { if (ws.readyState === WebSocket.OPEN) ws.send(data); });
+    if (term) {
+      term.onData(sendTerminalData);
+      if (typeof term.attachCustomKeyEventHandler === 'function') {
+        term.attachCustomKeyEventHandler(ev => {
+          const key = ev.key.toLowerCase();
+          if (ev.type !== 'keydown') return true;
+          if (ev.ctrlKey && ev.shiftKey && key === 'c') {
+            ev.preventDefault();
+            copyTerminalSelection();
+            return false;
+          }
+          if ((ev.ctrlKey && ev.shiftKey && key === 'v') || (ev.shiftKey && ev.key === 'Insert')) {
+            if (canReadClipboard()) {
+              ev.preventDefault();
+              pasteFromClipboard();
+              return false;
+            }
+            setClipboardStatus("Press Ctrl+V to paste");
+            return true;
+          }
+          if (ev.metaKey && key === 'c') {
+            ev.preventDefault();
+            copyTerminalSelection();
+            return false;
+          }
+          if (ev.metaKey && key === 'v') {
+            if (canReadClipboard()) {
+              ev.preventDefault();
+              pasteFromClipboard();
+              return false;
+            }
+            setClipboardStatus("Press Cmd+V to paste");
+            return true;
+          }
+          return true;
+        });
+      }
+    }
     let resizeTimer = null;
     const scheduleResize = () => {
       window.clearTimeout(resizeTimer);
@@ -127,11 +209,76 @@
     };
     window.addEventListener('resize', scheduleResize);
     if (window.ResizeObserver) new ResizeObserver(scheduleResize).observe(shell);
+    const copyTerminalSelection = async () => {
+      const selection = term && typeof term.getSelection === 'function' ? term.getSelection() : window.getSelection().toString();
+      if (!selection) {
+        setClipboardStatus("Select text first");
+        return;
+      }
+      try {
+        if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error("clipboard unavailable");
+        await navigator.clipboard.writeText(selection);
+        setClipboardStatus("Copied");
+        if (term && typeof term.clearSelection === 'function') term.clearSelection();
+      } catch (err) {
+        if (copyViaHiddenTextarea(selection)) {
+          setClipboardStatus("Copied");
+          if (term && typeof term.clearSelection === 'function') term.clearSelection();
+        } else {
+          setClipboardStatus("Clipboard blocked by browser");
+        }
+      }
+    };
+    const pasteFromClipboard = async () => {
+      try {
+        if (!canReadClipboard()) throw new Error("clipboard unavailable");
+        const text = await navigator.clipboard.readText();
+        if (!text) {
+          setClipboardStatus("Clipboard empty");
+          focusTerminal();
+          return;
+        }
+        pasteTerminalData(text);
+        setClipboardStatus("Pasted");
+        focusTerminal();
+      } catch (err) {
+        focusTerminal();
+        setClipboardStatus(window.isSecureContext ? "Press Ctrl+Shift+V to paste" : "Direct paste requires HTTPS; press Ctrl+Shift+V");
+      }
+    };
+    const handleNativePaste = ev => {
+      if (ev.__bapWebPasteHandled) return;
+      if (ev.defaultPrevented) return;
+      const data = ev.clipboardData;
+      if (!data) return;
+      const text = data.getData("text/plain");
+      if (!text) return;
+      ev.__bapWebPasteHandled = true;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const now = Date.now();
+      if (text === lastPasteText && now - lastPasteAt < 250) return;
+      lastPasteText = text;
+      lastPasteAt = now;
+      pasteTerminalData(text);
+      setClipboardStatus("Pasted");
+      focusTerminal();
+    };
+    shell.addEventListener('paste', handleNativePaste, true);
+    document.addEventListener('keydown', ev => {
+      const key = ev.key.toLowerCase();
+      if (ev.ctrlKey && !ev.shiftKey && key === 'v' && (shell.contains(document.activeElement) || document.activeElement === input)) {
+        setClipboardStatus("Use Ctrl+Shift+V or browser paste");
+      }
+    });
     form.addEventListener('submit', ev => {
       ev.preventDefault();
-      if (ws.readyState === WebSocket.OPEN) ws.send(input.value + "\n");
+      sendTerminalData(input.value + "\n");
       input.value = "";
+      focusTerminal();
     });
+    copyButton.addEventListener('click', copyTerminalSelection);
+    pasteButton.addEventListener('click', pasteFromClipboard);
   </script>
 </section>
 
