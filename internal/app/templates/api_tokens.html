@@ -21,6 +21,12 @@
 <section class="split">
   <div>
     <h2>Tokens</h2>
+    <nav class="filter-tabs" aria-label="API token status filters">
+      {{range .TokenFilters}}
+      <a href="{{.Href}}" class="{{if .Active}}active{{end}}" aria-current="{{if .Active}}page{{else}}false{{end}}">{{.Label}} <span>{{.Count}}</span></a>
+      {{end}}
+    </nav>
+    <p class="hint token-audit-hint">Revoked and expired tokens are retained as metadata records for audit visibility. They cannot authenticate.</p>
     <div class="table-wrap">
     <table>
       <thead>
@@ -51,7 +57,7 @@
           <td>{{.CreatedBy}}</td>
           <td class="actions">
             {{if eq .Status "active"}}
-            <form method="post" action="/ui/api-tokens/{{.ID}}/action" class="action-select-form" data-confirm-revoke="Revoke this API token?">
+            <form method="post" action="/ui/api-tokens/{{.ID}}/action?status={{$.TokenFilter}}" class="action-select-form" data-confirm-revoke="Revoke this API token?">
               <input type="hidden" name="csrf" value="{{$.User.CSRF}}">
               <select name="action" aria-label="API token action">
                 <option value="revoke">Revoke</option>
@@ -64,7 +70,7 @@
           </td>
         </tr>
       {{else}}
-        <tr><td colspan="10">No API tokens yet.</td></tr>
+        <tr><td colspan="10">No {{.TokenFilter}} API tokens.</td></tr>
       {{end}}
       </tbody>
     </table>
