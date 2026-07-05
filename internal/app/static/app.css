@@ -85,8 +85,9 @@ th { background: #eef3f5; font-size: 13px; color: #40505b; }
 .terminal .xterm { width: 100%; height: 100%; padding: 8px; }
 .terminal .xterm-viewport { overflow-y: auto; }
 .terminal-fallback { overflow: auto; padding: 12px; white-space: pre-wrap; }
-.terminal-input { display: flex; gap: 8px; margin-top: 8px; }
+.terminal-input { display: flex; gap: 8px; margin-top: 8px; align-items: center; flex-wrap: wrap; }
 .terminal-input input { flex: 1; }
+.terminal-status { color: #52636f; font-size: 13px; min-height: 1.2em; }
 .log-view { min-height: 260px; max-height: 560px; overflow: auto; background: #0f1418; color: #d7e6ee; border-radius: 8px; padding: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; white-space: pre-wrap; }
 .log-details .hint { margin-top: 8px; }
 .log-details .log-view { margin-top: 12px; }

@@ -1323,12 +1323,35 @@ func TestVMDetailUsesResizableTerminalAndCollapsedLogs(t *testing.T) {
 	for _, want := range []string{
 		`id="terminal-shell" class="terminal-shell"`,
 		`id="terminal" class="terminal"`,
+		`<form id="term-form" class="terminal-input">`,
+		`id="term-input"`,
+		`id="term-copy"`,
+		`id="term-paste"`,
+		`id="term-clipboard-status"`,
 		`new Terminal({cursorBlink: true, scrollback: 1000})`,
 		`terminalSize`,
 		`term.refresh(0, term.rows - 1)`,
 		`type: "resize"`,
 		`cols=${initialSize.cols}&rows=${initialSize.rows}`,
 		`ResizeObserver`,
+		`attachCustomKeyEventHandler`,
+		`navigator.clipboard`,
+		`navigator.clipboard.writeText`,
+		`navigator.clipboard.readText`,
+		`window.isSecureContext`,
+		`canReadClipboard()`,
+		`term.getSelection()`,
+		`term.paste`,
+		`document.execCommand("copy")`,
+		`addEventListener('paste', handleNativePaste`,
+		`ev.clipboardData`,
+		`ev.__bapWebPasteHandled`,
+		`ev.stopPropagation()`,
+		`lastPasteText`,
+		`ev.ctrlKey && ev.shiftKey && key === 'c'`,
+		`ev.ctrlKey && ev.shiftKey && key === 'v'`,
+		`ev.shiftKey && ev.key === 'Insert'`,
+		`Direct paste requires HTTPS; press Ctrl+Shift+V`,
 		`<section id="logs" class="detail-section">`,
 		`<div class="settings-list">`,
 		`<details class="settings-card log-details">`,
@@ -1340,6 +1363,38 @@ func TestVMDetailUsesResizableTerminalAndCollapsedLogs(t *testing.T) {
 	}
 	if strings.Contains(body, `convertEol`) {
 		t.Fatalf("terminal should not enable convertEol for PTY output, got: %s", body)
+	}
+	if strings.Contains(body, `ev.ctrlKey && key === 'c'`) {
+		t.Fatalf("terminal should not hijack unmodified Ctrl+C copy behavior, got: %s", body)
+	}
+	for _, unwanted := range []string{
+		`id="term-clipboard-panel"`,
+		`id="term-clipboard-buffer"`,
+		`id="term-send-buffer"`,
+		`Send buffer`,
+		`box.addEventListener('paste', handleNativePaste`,
+		`input.addEventListener('paste', handleNativePaste`,
+		`document.addEventListener('paste', ev =>`,
+		`id="term-paste-catcher"`,
+		`terminal-paste-catcher`,
+		`terminal-actions`,
+		`terminal-manual-input`,
+		`pasteCatcher`,
+		`focusPasteCatcher`,
+	} {
+		if strings.Contains(body, unwanted) {
+			t.Fatalf("terminal should not render clipboard buffer UI %q, got: %s", unwanted, body)
+		}
+	}
+	for _, guarded := range []string{
+		`if ((ev.ctrlKey && ev.shiftKey && key === 'v') || (ev.shiftKey && ev.key === 'Insert')) {
+            ev.preventDefault();`,
+		`if (ev.metaKey && key === 'v') {
+            ev.preventDefault();`,
+	} {
+		if strings.Contains(body, guarded) {
+			t.Fatalf("paste shortcut should not always prevent native paste, got: %s", body)
+		}
 	}
 	if strings.Contains(body, `<details id="logs" class="detail-section log-details">`) {
 		t.Fatalf("logs should use the settings-card expansion layout, got: %s", body)
