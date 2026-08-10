@@ -4,7 +4,7 @@ This guide is for LLMs and other programmatic clients that need to manage BAP We
 
 Web-accessible agent resources are also available from a running server:
 
-- `GET /docs/agents.md`
+- `GET /docs/agents.md` (primary LLM guide; keep this file aligned with it)
 - `GET /llms.txt`
 - `GET /openapi.json`
 - `GET /docs/api`
@@ -54,22 +54,27 @@ All API errors use:
 {"error":{"code":"unprocessable","message":"...","fields":{"field":"reason"},"request_id":"..."}}
 ```
 
+Common codes: `invalid` (400), `not_found` (404), `conflict` (409), `unprocessable` (422).
+
 ## Recommended Agent Workflow
 
 1. Check the service: `GET /api/health`
 2. Inspect identity: `GET /api/session`
-3. Select or create support resources:
+3. Check host readiness: `GET /api/host/status`
+4. Select or create support resources:
    - SSH keys: `/api/ssh-keys`
-   - base images: `/api/base-images`
-   - kernels: `/api/kernels`
-   - networks: `/api/networks`
+   - base images: `/api/base-images` (`status=active`)
+   - kernels: `/api/kernels` (`status=active`)
+   - networks: `/api/networks` (only for `shared_bridge`)
    - egress policies: `/api/egress-policies`
-4. Create a VM: `POST /api/vms`
-5. Start the VM: `POST /api/vms/{id}/start`
-6. Poll `GET /api/vms/{id}` until `state` is `running`
-7. Run commands with `POST /api/vms/{id}/exec`
-8. Inspect logs with `GET /api/vms/{id}/logs`
-9. Stop or delete the VM when finished.
+5. Create a VM: `POST /api/vms` (returns `stopped`)
+6. Start the VM: `POST /api/vms/{id}/start`
+7. Poll `GET /api/vms/{id}` until `state` is `running` (on `error`, read `last_error` and `/logs`)
+8. Run commands with `POST /api/vms/{id}/exec`
+9. Add ingress rules if ports must be published
+10. Stop or delete the VM when finished (only if the user asks)
+
+Names for VMs, networks, and egress policies must match `^[a-zA-Z0-9][a-zA-Z0-9-]{0,31}$`.
 
 ## MicroVMs
 
@@ -88,13 +93,13 @@ Create VM request fields include:
 ```json
 {
   "name": "agent-vm",
-  "vcpu_count": 2,
-  "mem_mib": 2048,
+  "vcpu_count": 1,
+  "mem_mib": 512,
   "dev_user": "dev",
   "ssh_key_id": "key-id",
   "extra_authorized_keys": "",
   "base_image_id": "image-id",
-  "rootfs_size_mib": 4096,
+  "rootfs_size_mib": 2048,
   "kernel_id": "kernel-id",
   "network_mode": "routed_ptp",
   "network_id": "",
@@ -104,6 +109,17 @@ Create VM request fields include:
   "git_ref": "HEAD"
 }
 ```
+
+Constraints and defaults:
+
+- Required: `name`, `vcpu_count` (1–32), `mem_mib` (128–262144), and either `ssh_key_id` or `extra_authorized_keys`.
+- `dev_user` defaults to `dev`; `git_ref` defaults to `HEAD`; `egress_mode` defaults to `allow_all`.
+- Omitting `base_image_id` / `kernel_id` selects server defaults among **active** resources. Prefer explicit IDs.
+- `network_mode`: `routed_ptp` or `shared_bridge`. For `shared_bridge`, `network_id` is required (`422` otherwise).
+- When `egress_policy_id` is set, the VM’s effective `egress_mode` becomes the policy mode (for example `restricted`).
+- Create returns `state: "stopped"`. `DELETE /api/vms/{id}` may be used on a running VM.
+
+Useful response fields: `id`, `state`, `ssh_port`, `guest_ip`, `host_ip`, `last_error`.
 
 ## Shell Access for Agents
 
@@ -157,6 +173,14 @@ For long-running commands, use exec jobs:
 - `GET /api/vms/{id}/exec-jobs/{job_id}/logs?lines=300`
 - `POST /api/vms/{id}/exec-jobs/{job_id}/cancel`
 
+Guest SSH (verification / humans), using the auto-allocated host DNAT port:
+
+```bash
+ssh -i /path/to/private_key -p {ssh_port} {dev_user}@{bap-host}
+```
+
+`{bap-host}` must be an address that receives host DNAT (often the BAP server LAN or public IP). `127.0.0.1` and direct `guest_ip` access frequently fail from other networks. Prefer `/exec` for automation.
+
 The interactive human terminal remains available at:
 
 - `GET /ws/vms/{id}/terminal?cols=120&rows=40`
@@ -176,29 +200,62 @@ This is a websocket PTY. Agents can use it, but it requires handling prompts, AN
 - `PUT /api/vms/{id}/egress-policy`
 - `DELETE /api/egress-policies/{id}`
 
-Ingress rule example:
+### Shared networks
+
+```json
+{"name":"lab-net","cidr":"172.31.90.0/28","gateway_ip":"172.31.90.1"}
+```
+
+- `cidr` must lie inside the configured host `vm_cidr` (commonly `172.31.0.0/16`).
+- Overlaps with other shared networks or routed VMs return `409 conflict`.
+- Invalid names return `400` with the name regex in `fields.name`.
+- `DELETE /api/networks/{id}` returns `409` while VMs still reference the network.
+
+### Ingress
 
 ```json
 {"protocol":"tcp","host_port":8081,"guest_port":80,"description":"agent test service"}
 ```
 
-Egress policy example:
+- `protocol`: `tcp` or `udp`.
+- Collisions with SSH ports or busy host ports return `409`.
+- List via `GET /api/vms/{id}/network` → `ingress_rules`.
+
+### Egress
 
 ```json
 {"name":"web-only","mode":"restricted","tcp_ports":"80,443","udp_ports":"53","cidrs":"0.0.0.0/0"}
 ```
 
+- Policy `mode`: `allow_all`, `deny_all`, or `restricted`.
+- Restricted requires at least one of `tcp_ports`, `udp_ports`, or `cidrs` (comma-separated).
+- Attach with create-time `egress_policy_id` or `PUT /api/vms/{id}/egress-policy` (`{"egress_policy_id":"..."}` or `{"mode":"allow_all"}`).
+
 ## SSH Keys
 
 - `GET /api/ssh-keys`
-- `POST /api/ssh-keys/generate`
-- `POST /api/ssh-keys/import`
+- `POST /api/ssh-keys/generate` body: `{"name":"agent-key"}`
+- `POST /api/ssh-keys/import` body: `{"name":"imported","public_key":"ssh-ed25519 AAAA..."}`
 - `GET /api/ssh-keys/{id}`
 - `DELETE /api/ssh-keys/{id}`
 
 Generated private keys are returned once in `private_key`; BAP Web stores only the public key.
 
+## Cleanup order
+
+When the user asks to remove agent-created resources:
+
+1. Cancel exec jobs if needed.
+2. Delete ingress rules (optional; VM delete removes them).
+3. `DELETE /api/vms/{id}` for each created VM.
+4. `DELETE /api/networks/{id}`.
+5. `DELETE /api/egress-policies/{id}`.
+6. `DELETE /api/ssh-keys/{id}`.
+7. Discard locally stored private keys.
+
 ## Base Images
+
+Selecting an active image is enough for normal VM work. Build/register/hooks are admin operations.
 
 - `GET /api/base-images`
 - `POST /api/base-images/register`
@@ -212,6 +269,8 @@ Generated private keys are returned once in `private_key`; BAP Web stores only t
 - `DELETE /api/image-hooks/{id}`
 
 ## Kernels
+
+Selecting an active kernel is enough for normal VM work. Import/upload/test are admin operations.
 
 - `GET /api/kernels`
 - `POST /api/kernels/firecracker-ci/scan`

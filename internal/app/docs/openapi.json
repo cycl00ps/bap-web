@@ -760,22 +760,22 @@
         "type": "object",
         "required": ["name", "vcpu_count", "mem_mib"],
         "properties": {
-          "name": {"type": "string"},
-          "vcpu_count": {"type": "integer", "minimum": 1},
-          "mem_mib": {"type": "integer", "minimum": 128},
+          "name": {"type": "string", "description": "Must match ^[a-zA-Z0-9][a-zA-Z0-9-]{0,31}$"},
+          "vcpu_count": {"type": "integer", "minimum": 1, "maximum": 32},
+          "mem_mib": {"type": "integer", "minimum": 128, "maximum": 262144},
           "ssh_port": {"type": "integer"},
           "dev_user": {"type": "string", "default": "dev"},
-          "ssh_key_id": {"type": "string"},
-          "extra_authorized_keys": {"type": "string"},
+          "ssh_key_id": {"type": "string", "description": "Required unless extra_authorized_keys is set"},
+          "extra_authorized_keys": {"type": "string", "description": "Required when ssh_key_id is omitted"},
           "repo_url": {"type": "string"},
           "git_ref": {"type": "string", "default": "HEAD"},
-          "egress_mode": {"type": "string", "enum": ["allow_all", "deny_all"]},
+          "egress_mode": {"type": "string", "enum": ["allow_all", "deny_all"], "description": "Ignored effective value when egress_policy_id is set"},
           "egress_policy_id": {"type": "string"},
           "network_mode": {"type": "string", "enum": ["routed_ptp", "shared_bridge"]},
-          "network_id": {"type": "string"},
-          "base_image_id": {"type": "string"},
+          "network_id": {"type": "string", "description": "Required when network_mode is shared_bridge"},
+          "base_image_id": {"type": "string", "description": "Active base image; omit to use server default"},
           "rootfs_size_mib": {"type": "integer"},
-          "kernel_id": {"type": "string"}
+          "kernel_id": {"type": "string", "description": "Active kernel; omit to use server default"}
         }
       },
       "ResourceRequest": {"type": "object", "properties": {"vcpu_count": {"type": "integer"}, "mem_mib": {"type": "integer"}, "restart": {"type": "boolean"}}},
@@ -784,12 +784,12 @@
       "VMExecJob": {"type": "object", "additionalProperties": true},
       "VMNetworkState": {"type": "object", "properties": {"vm": {"$ref": "#/components/schemas/VM"}, "network": {"$ref": "#/components/schemas/Network"}, "ingress_rules": {"type": "array", "items": {"$ref": "#/components/schemas/IngressRule"}}, "egress_policy": {"$ref": "#/components/schemas/EgressPolicy"}}},
       "Network": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "cidr": {"type": "string"}, "gateway_ip": {"type": "string"}, "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}}},
-      "NetworkRequest": {"type": "object", "properties": {"name": {"type": "string"}, "cidr": {"type": "string"}, "gateway_ip": {"type": "string"}}},
+      "NetworkRequest": {"type": "object", "required": ["name", "cidr"], "properties": {"name": {"type": "string", "description": "Must match ^[a-zA-Z0-9][a-zA-Z0-9-]{0,31}$"}, "cidr": {"type": "string", "description": "IPv4 CIDR inside the configured host vm_cidr"}, "gateway_ip": {"type": "string", "description": "Optional usable IPv4 inside cidr"}}},
       "IngressRule": {"type": "object", "properties": {"id": {"type": "string"}, "vm_id": {"type": "string"}, "protocol": {"type": "string", "enum": ["tcp", "udp"]}, "host_port": {"type": "integer"}, "guest_port": {"type": "integer"}, "description": {"type": "string"}, "created_at": {"type": "string", "format": "date-time"}}},
-      "IngressRuleRequest": {"type": "object", "properties": {"protocol": {"type": "string", "enum": ["tcp", "udp"]}, "host_port": {"type": "integer"}, "guest_port": {"type": "integer"}, "description": {"type": "string"}}},
-      "EgressPolicy": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "mode": {"type": "string"}, "tcp_ports": {"type": "string"}, "udp_ports": {"type": "string"}, "cidrs": {"type": "string"}, "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}}},
-      "EgressPolicyRequest": {"type": "object", "properties": {"name": {"type": "string"}, "mode": {"type": "string"}, "tcp_ports": {"type": "string"}, "udp_ports": {"type": "string"}, "cidrs": {"type": "string"}}},
-      "VMEgressPolicyRequest": {"type": "object", "properties": {"mode": {"type": "string"}, "egress_policy_id": {"type": "string"}}}
+      "IngressRuleRequest": {"type": "object", "required": ["protocol", "host_port", "guest_port"], "properties": {"protocol": {"type": "string", "enum": ["tcp", "udp"]}, "host_port": {"type": "integer", "minimum": 1, "maximum": 65535}, "guest_port": {"type": "integer", "minimum": 1, "maximum": 65535}, "description": {"type": "string"}}},
+      "EgressPolicy": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "mode": {"type": "string", "enum": ["allow_all", "deny_all", "restricted"]}, "tcp_ports": {"type": "string"}, "udp_ports": {"type": "string"}, "cidrs": {"type": "string"}, "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}}},
+      "EgressPolicyRequest": {"type": "object", "required": ["name", "mode"], "properties": {"name": {"type": "string"}, "mode": {"type": "string", "enum": ["allow_all", "deny_all", "restricted"]}, "tcp_ports": {"type": "string", "description": "Comma-separated TCP ports; required for restricted unless udp_ports or cidrs set"}, "udp_ports": {"type": "string"}, "cidrs": {"type": "string", "description": "Comma-separated IPv4 CIDRs"}}},
+      "VMEgressPolicyRequest": {"type": "object", "properties": {"mode": {"type": "string", "enum": ["allow_all", "deny_all"], "description": "Used when egress_policy_id is empty"}, "egress_policy_id": {"type": "string", "description": "When set, VM egress_mode becomes the policy mode"}}}
     }
   }
 }
