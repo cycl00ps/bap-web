@@ -16,3 +16,12 @@ Operational APIs require authentication. Agents should use an API token supplied
 Authorization: Bearer bap_...
 
 Agents should not expect unauthenticated operational access and should not ask BAP Web to generate a token unless the user has already authenticated as an admin and explicitly requested token creation.
+
+## Quick workflow
+
+1. Discover active SSH keys, base images, kernels, networks, and egress policies.
+2. Create SSH key if needed (store private_key once).
+3. POST /api/vms, then POST /api/vms/{id}/start; poll until running.
+4. Prefer POST /api/vms/{id}/exec over SSH or websocket terminals.
+5. Use ingress rules for app port publishes; use shared_bridge + network_id for multi-VM L2.
+6. Delete only when asked: VMs, then networks/policies/keys.

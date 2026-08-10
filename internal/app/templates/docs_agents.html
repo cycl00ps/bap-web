@@ -30,10 +30,11 @@
     <ol>
       <li>Read <code>/docs/agents.md</code> and <code>/openapi.json</code>.</li>
       <li>Call <code>GET /api/session</code> with the supplied bearer token to confirm identity.</li>
-      <li>Discover SSH keys, base images, kernels, networks, and egress policies.</li>
+      <li>Discover or create SSH keys; pick active base images and kernels; configure networks and egress as needed.</li>
       <li>Create and start VMs only when the user explicitly asks for that work.</li>
       <li>Use <code>POST /api/vms/{id}/exec</code> for shell commands and inspect exit codes.</li>
-      <li>Clean up created VMs unless the user asks to keep them running.</li>
+      <li>Publish app ports with ingress rules; use <code>shared_bridge</code> only with a <code>network_id</code>.</li>
+      <li>Clean up in order (VMs, then networks/policies/keys) only when the user asks.</li>
     </ol>
   </section>
 </section>
