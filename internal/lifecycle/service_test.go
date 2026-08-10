@@ -18,6 +18,82 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func TestNormalizeDevUser(t *testing.T) {
+	ok, err := normalizeDevUser("")
+	if err != nil || ok != "dev" {
+		t.Fatalf("default = %q, err=%v", ok, err)
+	}
+	ok, err = normalizeDevUser("builder")
+	if err != nil || ok != "builder" {
+		t.Fatalf("builder = %q, err=%v", ok, err)
+	}
+	for _, bad := range []string{"../../../../root", "../root", "alice/bob", "Root", "root user", "a.", "-bob", "toolongusername_over_thirty_two_chars"} {
+		if _, err := normalizeDevUser(bad); err == nil {
+			t.Fatalf("expected %q to be rejected", bad)
+		}
+	}
+}
+
+func TestGuestSSHDirRejectsTraversal(t *testing.T) {
+	root := t.TempDir()
+	dir, err := guestSSHDir(root, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, "home", "dev", ".ssh")
+	if dir != want {
+		t.Fatalf("ssh dir = %q, want %q", dir, want)
+	}
+	if _, err := guestSSHDir(root, "../../../../root"); err == nil {
+		t.Fatal("expected traversal username to be rejected")
+	}
+}
+
+func TestWriteGuestFilesRejectsPathTraversalDevUser(t *testing.T) {
+	root := t.TempDir()
+	hostTarget := filepath.Join(filepath.Dir(root), "escaped-root")
+	vm := &model.VM{
+		ID:                  "vm1",
+		Name:                "vm1",
+		DevUser:             "../../../../" + filepath.Base(hostTarget),
+		HostIP:              "172.31.1.1",
+		GuestIP:             "172.31.1.2",
+		CIDR:                30,
+		ExtraAuthorizedKeys: "ssh-ed25519 AAAA attacker@example",
+	}
+	if err := writeGuestFiles(root, vm, 18080); err == nil {
+		t.Fatal("expected writeGuestFiles to reject traversal dev_user")
+	}
+	if _, err := os.Stat(filepath.Join(hostTarget, ".ssh", "authorized_keys")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("host authorized_keys should not be created: %v", err)
+	}
+	if entries, err := os.ReadDir(root); err != nil {
+		t.Fatal(err)
+	} else if len(entries) != 0 {
+		t.Fatalf("expected no guest files written on rejection, found %v", entries)
+	}
+}
+
+func TestCreateVMRejectsPathTraversalDevUser(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+	_, err := svc.CreateVM(context.Background(), CreateRequest{
+		Name:                "evil-vm",
+		VCPUCount:           1,
+		MemMiB:              512,
+		DevUser:             "../../../../root",
+		ExtraAuthorizedKeys: "ssh-ed25519 AAAA attacker@example",
+		NetworkMode:         "routed_ptp",
+	})
+	if err == nil {
+		t.Fatal("expected CreateVM to reject traversal dev_user")
+	}
+	var domain *DomainError
+	if !errors.As(err, &domain) || domain.Code != CodeInvalid || domain.Fields["dev_user"] == "" {
+		t.Fatalf("expected Invalid with dev_user field, got %v", err)
+	}
+}
+
 func TestTapNameForIDFitsLinuxLimit(t *testing.T) {
 	name := tapNameForID("8725ee030cb1d96b")
 	if len(name) > maxLinuxIFNameLen {

@@ -312,7 +312,35 @@ func (s *Service) processRunning(ctx context.Context, vm *model.VM) bool {
 
 var nameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9-]{0,31}$`)
 
+// devUserRe accepts a single Linux-style login name. Path separators and ".." are
+// rejected so guest home paths cannot escape a mounted rootfs onto the host.
+var devUserRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+
 const maxLinuxIFNameLen = 15
+
+func normalizeDevUser(user string) (string, error) {
+	user = strings.TrimSpace(user)
+	if user == "" {
+		user = "dev"
+	}
+	if !devUserRe.MatchString(user) {
+		return "", Invalid("VM dev_user is invalid", map[string]string{"dev_user": "must be a Linux username matching " + devUserRe.String()})
+	}
+	return user, nil
+}
+
+func guestSSHDir(root, devUser string) (string, error) {
+	user, err := normalizeDevUser(devUser)
+	if err != nil {
+		return "", err
+	}
+	root = filepath.Clean(root)
+	sshDir := filepath.Join(root, "home", user, ".ssh")
+	if !pathWithin(sshDir, root) {
+		return "", Invalid("VM dev_user is invalid", map[string]string{"dev_user": "guest home path escapes rootfs"})
+	}
+	return sshDir, nil
+}
 
 func tapNameForID(id string) string {
 	const prefix = "tap-"
@@ -349,9 +377,11 @@ func (s *Service) CreateVM(ctx context.Context, req CreateRequest) (*model.VM, e
 	if req.MemMiB < 128 || req.MemMiB > 262144 {
 		return nil, Invalid("VM resource request is invalid", map[string]string{"mem_mib": "must be between 128 and 262144"})
 	}
-	if req.DevUser == "" {
-		req.DevUser = "dev"
+	devUser, err := normalizeDevUser(req.DevUser)
+	if err != nil {
+		return nil, err
 	}
+	req.DevUser = devUser
 	if req.GitRef == "" {
 		req.GitRef = "HEAD"
 	}
@@ -1342,7 +1372,11 @@ func (s *Service) prepareRootFS(ctx context.Context, vm *model.VM) error {
 	if err := run(ctx, "mount", "--bind", "/dev", filepath.Join(mountRoot, "dev")); err != nil {
 		return err
 	}
-	_ = run(ctx, "chroot", mountRoot, "chown", "-R", vm.DevUser+":"+vm.DevUser, "/home/"+vm.DevUser+"/.ssh")
+	devUser, err := normalizeDevUser(vm.DevUser)
+	if err != nil {
+		return err
+	}
+	_ = run(ctx, "chroot", mountRoot, "chown", "-R", devUser+":"+devUser, "/home/"+devUser+"/.ssh")
 	_ = run(ctx, "umount", filepath.Join(mountRoot, "dev"))
 	if err := run(ctx, "umount", mountRoot); err != nil {
 		return err
@@ -1352,6 +1386,11 @@ func (s *Service) prepareRootFS(ctx context.Context, vm *model.VM) error {
 }
 
 func writeGuestFiles(root string, vm *model.VM, metadataPort int) error {
+	devUser, err := normalizeDevUser(vm.DevUser)
+	if err != nil {
+		return err
+	}
+	vm.DevUser = devUser
 	env := fmt.Sprintf("DEV_USER='%s'\nPROJECT='%s'\nWORK_DIR=/work\nREPO_URL='%s'\nGIT_REF='%s'\nDEV_SSH_KEY='%s'\n",
 		shellQuote(vm.DevUser), shellQuote(vm.Name), shellQuote(vm.RepoURL), shellQuote(vm.GitRef), shellQuote(strings.TrimSpace(vm.ManagedSSHPublicKey+"\n"+vm.ExtraAuthorizedKeys)))
 	if err := os.WriteFile(filepath.Join(root, "etc/project.env"), []byte(env), 0o644); err != nil {
@@ -1381,7 +1420,10 @@ method=disabled
 	if err := os.WriteFile(nmPath, []byte(nm), 0o600); err != nil {
 		return err
 	}
-	sshDir := filepath.Join(root, "home", vm.DevUser, ".ssh")
+	sshDir, err := guestSSHDir(root, vm.DevUser)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(sshDir, 0o700); err != nil {
 		return err
 	}
